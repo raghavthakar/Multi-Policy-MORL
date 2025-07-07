@@ -39,7 +39,7 @@ class ERLManager:
         device : torch.device
             Where the networks live.
         """
-        self.env = FourRoomWrapper(seed=seed)
+        self.env = FourRoomWrapper(seed=seed, beta=cfg["env"]["beta_novelty"])
         self.w = scalar_weight.astype(np.float32)
 
         self.worker = RLWorker(self.env.observation_space.shape,
@@ -70,7 +70,7 @@ class ERLManager:
             }
         """
         for _ in range(episodes):
-            ret_vec, ep_len = rollout(self.env, self.worker, learn=True)
+            ret_vec, ep_len, ext_ret_vec = rollout(self.env, self.worker, learn=True)
             ret_scalar = float((ret_vec * self.w).sum())
 
             self.vector_returns.append(ret_vec)
@@ -79,7 +79,8 @@ class ERLManager:
 
         return dict(mean_scalar_return=np.mean(self.scalar_returns[-episodes:]),
                     episodes=episodes,
-                    frames=self.frames_collected)
+                    frames=self.frames_collected,
+                    ext_ret_vec=ext_ret_vec,)
 
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #

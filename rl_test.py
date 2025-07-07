@@ -1,115 +1,75 @@
+# catserl/cli/rl_test.py
 """
-rl_tester.py
-Minimal smoke-test for the RLWorker + ReplayBuffer on FourRooms-v0.
+CLI smoke‑test that wires:
+   FourRoomWrapper  +  RLWorker  +  EnvRunner
 
-Assumes:
-  • data.buffers.ReplayBuffer  (imported by rl.dqn)
-  • rl.dqn.RLWorker            (code provided earlier)
-  • config/default.yaml        (sample shown previously)
-
-No evolution code is touched.
+Run:
+   python -m catserl.cli.rl_test --episodes 200
 """
 from __future__ import annotations
-import argparse
-import pathlib
-import sys
-import time
+import argparse, pathlib, sys, random, time
+import numpy as np, torch, yaml
+from collections import deque
 
-import gymnasium as gym
-import mo_gymnasium
-import numpy as np
-import torch
-import yaml
+recent10 = deque(maxlen=10)
 
-# --- repo-local imports -----------------------------------------------------#
-ROOT = pathlib.Path(__file__).resolve().parents[0]   # adjust if needed
+ROOT = pathlib.Path(__file__).resolve().parents[0]
 sys.path.append(str(ROOT))
 
-from catserl.rl.dqn import RLWorker         # noqa: E402
+from catserl.envs.four_room import FourRoomWrapper          # noqa: E402
+from catserl.rl.dqn import RLWorker                        # noqa: E402
+from catserl.runner import EnvRunner                       # noqa: E402
 
-# --------------------------------------------------------------------------- #
-# helper
-# --------------------------------------------------------------------------- #
-def load_cfg(path: pathlib.Path):
-    with open(path, "r") as fh:
+
+def load_cfg():
+    cfg_path = ROOT / "catserl" / "config" / "default.yaml"
+    with open(cfg_path, "r") as fh:
         return yaml.safe_load(fh)
 
 
+
+def print_callback(info):
+    """
+    Called by EnvRunner after each episode.
+    info["ret_scalar"]   is already the scalarised return.
+    """
+    recent10.append(info["ret_scalar"])
+    mean10 = sum(recent10) / len(recent10)
+
+    print(f"Ep {info['episode']:03d}"
+          f" | len {info['ep_len']:3d}"
+          f" | R_vec {info['ret_vec']}"
+          f" | R_scalar {info['ret_scalar']:.1f}"
+          f" | 10-ep mean {mean10:.2f}")
+
+
 def main(args):
-    # -------------------- load config ------------------------------------- #
-    cfg = load_cfg(ROOT / "catserl" / "config" / "default.yaml")
+    cfg = load_cfg()
     device = torch.device(cfg.get("device", "cpu"))
 
-    # -------------------- seed -------------------------------------------- #
-    import random
-    np.random.seed(cfg["seed"])
-    random.seed(cfg["seed"])
-    torch.manual_seed(cfg["seed"])
+    # seeding
+    seed = cfg["seed"]
+    np.random.seed(seed);  random.seed(seed);  torch.manual_seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(cfg["seed"])
+        torch.cuda.manual_seed_all(seed)
 
-    # -------------------- env --------------------------------------------- #
-    env = mo_gymnasium.make("four-room-v0")
-    env.reset(seed=cfg["seed"])
-    obs_shape = env.observation_space.shape       # e.g. (13,)
-    n_actions = env.action_space.n                # 4
-
-    # -------------------- RL worker --------------------------------------- #
+    # env + agent
+    env = FourRoomWrapper(seed=seed)
+    obs_shape = env.observation_space.shape
+    n_actions = env.action_space.n
     scalar_weight = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-    worker = RLWorker(obs_shape,
-                      n_actions,
-                      scalar_weight,
-                      cfg["dqn"],
-                      device)
 
-    # -------------------- training loop ----------------------------------- #
-    N_EPISODES = args.episodes
-    returns_ext = []      # external scalarised return
-    returns_vec = []      # vector returns
+    agent = RLWorker(obs_shape, n_actions, scalar_weight, cfg["dqn"], device)
+    runner = EnvRunner(env, agent, scalar_weight, callbacks=[print_callback])
 
-    for ep in range(1, N_EPISODES + 1):
-        s, _ = env.reset()
-        done, ep_len = False, 0
-        ret_vec = np.zeros_like(scalar_weight, dtype=np.float32)
-
-        while not done:
-            a = worker.act(s)
-            s2, r_vec, done, trunc, _ = env.step(a)
-            done = done or trunc
-
-            # bookkeeping
-            ret_vec += r_vec
-            ep_len += 1
-
-            # store + learn
-            worker.remember(s, a, r_vec, s2, done)
-            worker.update()
-
-            s = s2
-
-        # end episode
-        returns_vec.append(ret_vec)
-        returns_ext.append(float(ret_vec[0]))     # scalarised by [1,0,0]
-
-        avg_scalar = np.mean(returns_ext[-10:])
-        print(f"Ep {ep:03d} | len {ep_len:3d} | "
-              f"R_vec {ret_vec} | R_scalar {ret_vec[0]:.1f} | "
-              f"10-ep mean {avg_scalar:.2f}")
-
-    # summary
-    print("\nFinished.",
-          f"Mean scalar return over {N_EPISODES} eps:",
-          f"{np.mean(returns_ext):.2f}")
+    runner.run(n_episodes=args.episodes, learn=True)
     env.close()
 
 
-# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=10000,
-                        help="number of episodes to run")
-    args = parser.parse_args()
-
-    tic = time.time()
+    p = argparse.ArgumentParser()
+    p.add_argument("--episodes", type=int, default=2000)
+    args = p.parse_args()
+    t0 = time.time()
     main(args)
-    print(f"Elapsed: {time.time() - tic:.1f}s")
+    print(f"Elapsed: {time.time()-t0:.1f}s")

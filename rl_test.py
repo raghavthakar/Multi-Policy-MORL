@@ -40,8 +40,17 @@ def main(args):
     cfg = load_cfg(ROOT / "catserl" / "config" / "default.yaml")
     device = torch.device(cfg.get("device", "cpu"))
 
+    # -------------------- seed -------------------------------------------- #
+    import random
+    np.random.seed(cfg["seed"])
+    random.seed(cfg["seed"])
+    torch.manual_seed(cfg["seed"])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg["seed"])
+
     # -------------------- env --------------------------------------------- #
     env = mo_gymnasium.make("four-room-v0")
+    env.reset(seed=cfg["seed"])
     obs_shape = env.observation_space.shape       # e.g. (13,)
     n_actions = env.action_space.n                # 4
 
@@ -59,7 +68,7 @@ def main(args):
     returns_vec = []      # vector returns
 
     for ep in range(1, N_EPISODES + 1):
-        s, _ = env.reset(seed=cfg["seed"])
+        s, _ = env.reset()
         done, ep_len = False, 0
         ret_vec = np.zeros_like(scalar_weight, dtype=np.float32)
 
@@ -97,7 +106,7 @@ def main(args):
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=3000,
+    parser.add_argument("--episodes", type=int, default=10000,
                         help="number of episodes to run")
     args = parser.parse_args()
 

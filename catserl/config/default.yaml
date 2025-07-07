@@ -10,19 +10,19 @@ device: "cpu"           # "cpu" or "cuda"
 # -------------------------------------------------
 dqn:
   hidden_dim:        128        # width of shared + stream layers
-  lr:                1e-4       # Adam LR (same for all params)
+  lr:                5e-4       # Adam LR (same for all params)
   gamma:             0.99       # discount
   tau:               0.005      # soft-update factor for target net
 
   # replay + SGD
-  buffer_size:       100_000    # main ReplayBuffer capacity
-  batch_size:        64
-  update_every:      20         # env steps per TD update
+  buffer_size:       50_000    # main ReplayBuffer capacity
+  batch_size:        32
+  update_every:      4         # env steps per TD update
 
   # ε-greedy exploration schedule
   eps_start:         1.0
   eps_end:           0.05
-  eps_decay_frames:  200_000
+  eps_decay_frames:  20_000
 
 # -------------------------------------------------
 #  Buffers for genetic actors (data/buffers.py)

@@ -7,6 +7,7 @@ import torch
 from catserl.envs.four_room import FourRoomWrapper
 from catserl.rl.dqn import RLWorker
 from catserl.envs.rollout import rollout
+from catserl.pderl import eval_pop, population, proximal_mutation, selection
 
 
 class ERLManager:
@@ -47,6 +48,11 @@ class ERLManager:
                                self.w,
                                cfg["dqn"],
                                device)
+        
+        self.pop = [population.GeneticActor(self.env.observation_space.shape, 
+                                            self.env.action_space.n, 
+                                            device=device) 
+                                            for _ in range(cfg["pderl"]["pop_size"])]
 
         # Stats
         self.scalar_returns: List[float] = []
@@ -69,6 +75,7 @@ class ERLManager:
               "frames": int,
             }
         """
+        # Run the gradient step on the worker
         for _ in range(episodes):
             ret_vec, ep_len, ext_ret_vec = rollout(self.env, self.worker, learn=True)
             ret_scalar = float((ret_vec * self.w).sum())
@@ -76,6 +83,30 @@ class ERLManager:
             self.vector_returns.append(ret_vec)
             self.scalar_returns.append(ret_scalar)
             self.frames_collected += ep_len
+        
+        stats, eval_frames = eval_pop.eval_pop(self.pop,
+                                               env=self.env,
+                                               weight_vector=self.w,
+                                               episodes_per_actor=episodes)
+        self.frames_collected += eval_frames
+
+        self.pop = selection.elitist_select(self.pop, mu=len(self.pop) // 2)
+        
+        for i in range(len(self.pop)):
+            print("Weight: ", self.w, self.pop[i].vector_return)
+
+        # RL → GA sync  (every generation for now)
+        rl_actor = population.GeneticActor(self.env.observation_space.shape,
+                                        self.env.action_space.n,
+                                        device=self.worker.device)
+        rl_actor.load_flat_params(
+            torch.cat([p.view(-1) for p in self.worker.actor_state_dict().values()])
+        )
+        self.pop.append(rl_actor)
+        
+        offsprings = [ind.clone() for ind in self.pop]
+        proximal_mutation.proximal_mutate(offsprings, self.worker.critic())
+        self.pop.extend(offsprings)
 
         return dict(mean_scalar_return=np.mean(self.scalar_returns[-episodes:]),
                     episodes=episodes,

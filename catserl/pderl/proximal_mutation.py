@@ -1,15 +1,10 @@
 # ==================== catserl/pderl/proximal_mutation.py ====================
 """
-Proximal‑safe mutation (Eq. 4 in the PDERL paper, AAAI‑20).
+Proximal-safe mutation (PDERL, Eq. 4)
 
-The idea: perturb actor parameters by gaussian noise ε, then
-scale that noise by 1 / ‖J‖ where
+θ' = θ + (1 / ‖J‖) · ε ,     ε ~ N(0, σ² I)
 
-    J = ∂Q(s, π_θ(s)) / ∂θ        (Jacobian w.r.t. actor parameters)
-                                  averaged over a batch of states.
-
-Here we implement a *vector‑norm* version: one global scale per actor,
-which is what the original PDERL repo uses (see `proximal_mutate()`).
+where  J = ∂Q(s, πθ(s)) / ∂θ   averaged over a mini-batch of states.
 """
 
 from __future__ import annotations
@@ -18,21 +13,21 @@ import torch, numpy as np
 from catserl.pderl.population import GeneticActor
 
 
+# --------------------------------------------------------------------------- #
+# helper: ‖J‖_2  (batch-averaged)
+# --------------------------------------------------------------------------- #
 def _jacobian_norm(actor: GeneticActor,
                    critic: torch.nn.Module,
                    states: torch.Tensor) -> torch.Tensor:
     """
-    Compute ||J||_2 where J = dQ(s, π(s)) / dθ for the given actor.
-    We use the squared‐sums of per‑parameter grads, then sqrt.
+    L2 norm of gradient of the critic value w.r.t actor parameters,
+    average over the batch in accordance with the PDERL reference repo.
     """
-    # Forward pass: action indices
     logits = actor.net(states)
-    act_idx = logits.argmax(dim=1, keepdim=True)           # [B,1]
+    probs  = torch.softmax(logits / 0.1, dim=1)      # τ = 0.1
+    q_all  = critic(states)                          # [B, |A|]
+    q      = (probs * q_all).sum(dim=1).mean()       # scalar
 
-    # Critic Q-values for chosen actions
-    q = critic(states).gather(1, act_idx).mean()           # scalar
-
-    # Gradients w.r.t. actor parameters
     grads = torch.autograd.grad(q,
                                 actor.net.parameters(),
                                 retain_graph=False,
@@ -40,39 +35,39 @@ def _jacobian_norm(actor: GeneticActor,
 
     total = torch.tensor(0.0, device=states.device)
     for g in grads:
-        total += (g**2).sum()
-    return torch.sqrt(total)
+        total += (g ** 2).sum()
+    return torch.sqrt(total) + 1e-8                      # avoid div-by-0
 
 
+# --------------------------------------------------------------------------- #
+# main API
+# --------------------------------------------------------------------------- #
 def proximal_mutate(pop: List[GeneticActor],
                     critic: torch.nn.Module,
                     sigma: float = 0.02,
                     batch_size: int = 32,
-                    clamp_std: float = 0.1):
+                    clamp_std: float = 0.1) -> None:
     """
-    Mutate every actor in `pop` *in place* using proximal mutation.
+    Mutate each GeneticActor in `pop` in place.
 
     Parameters
     ----------
-    pop : list[GeneticActor]
-    critic : Q‑network frozen parameters
-    sigma : base Gaussian std before scaling
-    batch_size : number of states drawn from the actor's mini‑buffer
-    clamp_std : cap on scaling factor to avoid huge updates
+    sigma       : std of isotropic noise ε before scaling.
+    batch_size  : #states drawn from actor's MiniBuffer to estimate ‖J‖.
+    clamp_std   : upper bound on 1/‖J‖ so steps never exceed `clamp_std·σ`.
     """
     for actor in pop:
-        if len(actor.buffer) < batch_size:
-            # fallback: random states from replay will be available later
-            continue
+        if len(actor.buffer) == 0:
+            continue                                    # no data yet
 
-        states, _ = actor.buffer.sample(batch_size, device=actor.device)
+        bs = min(batch_size, len(actor.buffer))
+        states, _ = actor.buffer.sample(bs, device=actor.device)
         states.requires_grad_(True)
 
-        jac_norm = _jacobian_norm(actor, critic, states) + 1e-8
-        scale = torch.clamp(sigma / jac_norm, max=clamp_std)
+        jac_norm = _jacobian_norm(actor, critic, states)         # scalar
+        scale    = torch.clamp(1.0 / jac_norm, max=clamp_std)    # Eq.(4)
 
-        # Gaussian perturbation in flat parameter space
+        # ε ~ N(0, σ² I)
         noise = torch.randn_like(actor.flat_params()) * sigma
         new_params = actor.flat_params() + scale * noise
         actor.load_flat_params(new_params)
-

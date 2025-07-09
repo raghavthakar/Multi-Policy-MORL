@@ -53,18 +53,34 @@ class ERLManager:
                                             self.env.action_space.n, 
                                             device=device) 
                                             for _ in range(cfg["pderl"]["pop_size"])]
+        
+        self.gen_counter = 0
+        self.migrate_every = int(cfg["pderl"].get("migrate_every_gens", 5))
 
         # Stats
         self.scalar_returns: List[float] = []
         self.vector_returns: List[np.ndarray] = []
         self.frames_collected = 0
+    
+    # ---------- helper: build GA genome from RL policy -----------------
+    def _make_rl_actor(self):
+        flat, hid = self.worker.export_policy_params()
+        rl_actor = population.GeneticActor(self.env.observation_space.shape,
+                                        self.env.action_space.n,
+                                        hidden_dim=hid,
+                                        device=self.worker.device)
+        rl_actor.load_flat_params(flat)
+        # seed buffer with one rollout so proximal mutation works next gen
+        rollout(self.env, rl_actor, learn=True)
+        return rl_actor
 
     # ------------------------------------------------------------------ #
     # ----------  Warm-up generation loop  ------------------------------ #
     # ------------------------------------------------------------------ #
-    def train_generation(self, episodes: int = 1) -> Dict:
+    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 1) -> Dict:
         """
-        Collect `episodes` rollouts, let the RL worker learn online.
+        Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online, and 
+        perform one generation for the EA by evaluating each actor for ea_episodes_per_actor episodes.
 
         Returns
         -------
@@ -76,7 +92,7 @@ class ERLManager:
             }
         """
         # Run the gradient step on the worker
-        for _ in range(episodes):
+        for _ in range(dqn_episodes):
             ret_vec, ep_len, ext_ret_vec = rollout(self.env, self.worker, learn=True)
             ret_scalar = float((ret_vec * self.w).sum())
 
@@ -87,31 +103,27 @@ class ERLManager:
         stats, eval_frames = eval_pop.eval_pop(self.pop,
                                                env=self.env,
                                                weight_vector=self.w,
-                                               episodes_per_actor=episodes)
+                                               episodes_per_actor=ea_episodes_per_actor)
         self.frames_collected += eval_frames
 
-        self.pop = selection.elitist_select(self.pop, mu=len(self.pop) // 2)
-        
+        self.pop = selection.elitist_select(self.pop, mu=len(self.pop))
+
         for i in range(len(self.pop)):
             print("Weight: ", self.w, self.pop[i].vector_return)
-
-        # RL → GA sync  (every generation for now)
-        rl_actor = population.GeneticActor(self.env.observation_space.shape,
-                                        self.env.action_space.n,
-                                        device=self.worker.device)
-        rl_actor.load_flat_params(
-            torch.cat([p.view(-1) for p in self.worker.actor_state_dict().values()])
-        )
-        self.pop.append(rl_actor)
         
-        offsprings = [ind.clone() for ind in self.pop]
-        proximal_mutation.proximal_mutate(offsprings, self.worker.critic())
-        self.pop.extend(offsprings)
+        proximal_mutation.proximal_mutate(self.pop, self.worker.critic())
 
-        return dict(mean_scalar_return=np.mean(self.scalar_returns[-episodes:]),
-                    episodes=episodes,
-                    frames=self.frames_collected,
-                    ext_ret_vec=ext_ret_vec,)
+        # -------------------- RL → GA migration -------------------- #
+        if self.migrate_every > 0 and (self.gen_counter % self.migrate_every) == 0:
+            rl_actor = self._make_rl_actor()
+            worst = min(self.pop, key=lambda ind: ind.fitness if ind.fitness is not None else -np.inf)
+            self.pop.remove(worst)
+            self.pop.append(rl_actor)
+        
+        # offsprings = [ind.clone() for ind in self.pop]
+        # self.pop.extend(offsprings)
+
+        self.gen_counter += 1
 
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #
@@ -119,10 +131,6 @@ class ERLManager:
     def critic(self):
         """Return the worker's critic network (used by distilled crossover)."""
         return self.worker.critic()
-
-    def actor_state_dict(self):
-        """Flat copy of the current policy weights (for RL → GA sync)."""
-        return self.worker.actor_state_dict()
 
     def get_scalar_returns(self):
         return self.scalar_returns

@@ -17,12 +17,18 @@ dqn:
   # replay + SGD
   buffer_size:       50_000    # main ReplayBuffer capacity
   batch_size:        32
-  update_every:      4         # env steps per TD update
+  update_every:      50         # env steps per TD update
 
   # ε-greedy exploration schedule
   eps_start:         1.0
   eps_end:           0.05
   eps_decay_frames:  20_000
+
+# -------------------------------------------------
+# PDERL parameters   (pderl/)
+pderl:
+  pop_size:          10         # subpopulation size of each pderl island
+  migrate_every_gens:  5     # copy RL actor into EA population every X generations
 
 # -------------------------------------------------
 #  Buffers for genetic actors (data/buffers.py)

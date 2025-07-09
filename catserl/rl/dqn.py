@@ -103,11 +103,6 @@ class RLWorker:
     def critic(self) -> DuelingQNet:
         return self.net
 
-    def actor_state_dict(self):
-        sd = self.net.state_dict()
-        # shared + advantage stream → deterministic policy
-        return {k:v.clone() for k,v in sd.items() if k.startswith("shared") or k.startswith("a.")}
-
     def save(self, path: str):
         torch.save({
             "net": self.net.state_dict(),
@@ -122,3 +117,29 @@ class RLWorker:
         self.tgt.load_state_dict(ck["tgt"])
         self.optim.load_state_dict(ck["opt"])
         self.frame_idx = ck["frame"]
+
+    # ------------------------------------------------------------------
+    #  Export current deterministic policy (arg-max over Q) as flat weights
+    # ------------------------------------------------------------------
+    def export_policy_params(self):
+        """
+        Returns
+        -------
+        flat_params : torch.Tensor  (1-D, detached, on CPU)
+            Weights that reproduce  π(s)=argmax_a Q(s,a).
+        hidden_dim  : int
+            Width of the hidden layers (needed by the GA side).
+        """
+        # Extract weights that matter for logits = Advantage stream
+        with torch.no_grad():
+            flat = torch.cat([
+                self.net.shared[1].weight.flatten(),
+                self.net.shared[1].bias,
+                self.net.a[0].weight.flatten(),
+                self.net.a[0].bias,
+                self.net.a[2].weight.flatten(),
+                self.net.a[2].bias
+            ]).cpu().clone()
+
+        hidden_dim = self.net.shared[1].out_features
+        return flat, hidden_dim

@@ -11,18 +11,18 @@ device: "cpu"           # "cpu" or "cuda"
 dqn:
   hidden_dim:        128        # width of shared + stream layers
   lr:                5e-4       # Adam LR (same for all params)
-  gamma:             0.99       # discount
+  gamma:             0.95       # discount
   tau:               0.005      # soft-update factor for target net
 
   # replay + SGD
   buffer_size:       50_000    # main ReplayBuffer capacity
   batch_size:        32
-  update_every:      50         # env steps per TD update
+  update_every:      2         # env steps per TD update
 
   # ε-greedy exploration schedule
   eps_start:         1.0
   eps_end:           0.05
-  eps_decay_frames:  20_000
+  eps_decay_frames:  3_000
 
 # -------------------------------------------------
 # PDERL parameters   (pderl/)
@@ -42,4 +42,4 @@ mini_buffer_size: 8192          # per-genome circular buffer length
 env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
-  beta_novelty: 0.1             # intrinsic-reward scale
+  beta_novelty: 0.05             # intrinsic-reward scale

@@ -7,7 +7,7 @@ import torch
 from catserl.envs.four_room import FourRoomWrapper
 from catserl.rl.dqn import RLWorker
 from catserl.envs.rollout import rollout
-from catserl.pderl import eval_pop, population, proximal_mutation, selection
+from catserl.pderl import eval_pop, population, proximal_mutation, selection, crossover
 
 
 class ERLManager:
@@ -40,6 +40,7 @@ class ERLManager:
         device : torch.device
             Where the networks live.
         """
+        self.cfg = cfg
         self.env = FourRoomWrapper(seed=seed, beta=cfg["env"]["beta_novelty"])
         self.w = scalar_weight.astype(np.float32)
 
@@ -73,6 +74,27 @@ class ERLManager:
         # seed buffer with one rollout so proximal mutation works next gen
         rollout(self.env, rl_actor, learn=True)
         return rl_actor
+    
+    # ---- helper for greedy parent selection ------------------------- #
+    def _pick_parents(self, elite):
+        """
+        Choose two *distinct* parents from the `elite` list.
+        Probability ∝ (mu – rank + 1) where rank=1 is best.
+        """
+        mu = len(elite)
+        ranks = np.arange(1, mu + 1)                   # 1 .. mu
+        total = mu * (mu + 1) / 2                       # normaliser
+        probs = (mu - ranks + 1) / total               # higher rank → higher prob
+
+        # first parent
+        idx_a = np.random.choice(mu, p=probs)
+
+        # second parent: draw again until different index
+        idx_b = idx_a
+        while idx_b == idx_a:
+            idx_b = np.random.choice(mu, p=probs)
+
+        return elite[idx_a], elite[idx_b]
 
     # ------------------------------------------------------------------ #
     # ----------  Warm-up generation loop  ------------------------------ #
@@ -106,22 +128,34 @@ class ERLManager:
                                                episodes_per_actor=ea_episodes_per_actor)
         self.frames_collected += eval_frames
 
-        self.pop = selection.elitist_select(self.pop, mu=len(self.pop))
+        # ---------- logging ------------------------------------------ #
+        for ind in self.pop:
+            print(f"Weight {self.w} vector return: {ind.vector_return}, ")
 
-        for i in range(len(self.pop)):
-            print("Weight: ", self.w, self.pop[i].vector_return)
-        
-        proximal_mutation.proximal_mutate(self.pop, self.worker.critic())
+        # ---------- evolutionary step -------------------------------- #
+        mu = max(1, len(self.pop)//2)                      # retain top half
+        elite = selection.elitist_select(self.pop, mu)
 
-        # -------------------- RL → GA migration -------------------- #
-        if self.migrate_every > 0 and (self.gen_counter % self.migrate_every) == 0:
-            rl_actor = self._make_rl_actor()
-            worst = min(self.pop, key=lambda ind: ind.fitness if ind.fitness is not None else -np.inf)
-            self.pop.remove(worst)
-            self.pop.append(rl_actor)
-        
-        # offsprings = [ind.clone() for ind in self.pop]
-        # self.pop.extend(offsprings)
+        # (mu − 1) crossover offspring
+        offsprings = []
+        while len(offsprings) < mu-1 and len(elite) > 1:
+            pa, pb = self._pick_parents(elite)
+            child  = crossover.distilled_crossover(pa, pb,
+                                                   self.worker.critic(),
+                                                   self.cfg["pderl"],
+                                                   device=self.worker.device)
+            offsprings.append(child)
+
+        # population = elites + offspring   (size = mu + mu-1 = n-1)
+        self.pop = elite + offsprings
+
+        # mutate every genome currently in pop
+        proximal_mutation.proximal_mutate(self.pop, self.worker.critic(),
+                                          sigma=self.cfg["pderl"].get("sigma",0.02))
+
+        # RL → GA migration every gen (adds 1, size back to n)
+        rl_actor = self._make_rl_actor()
+        self.pop.append(rl_actor)
 
         self.gen_counter += 1
 

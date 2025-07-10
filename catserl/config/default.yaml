@@ -29,6 +29,9 @@ dqn:
 pderl:
   pop_size:          10         # subpopulation size of each pderl island
   migrate_every_gens:  5     # copy RL actor into EA population every X generations
+  bc_epochs:    1
+  bc_batch:     256
+  crossover_lr: 1e-3
 
 # -------------------------------------------------
 #  Buffers for genetic actors (data/buffers.py)

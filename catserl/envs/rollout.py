@@ -13,7 +13,7 @@ from typing import Tuple, Any
 import numpy as np
 
 
-def rollout(env, policy, learn: bool = True) -> Tuple[np.ndarray, int, np.ndarray]:
+def rollout(env, policy, learn: bool = True, max_ep_len: int = -1) -> Tuple[np.ndarray, int, np.ndarray]:
     """
     Runs ONE episode and (optionally) lets the policy learn online.
 
@@ -27,6 +27,7 @@ def rollout(env, policy, learn: bool = True) -> Tuple[np.ndarray, int, np.ndarra
     done, trunc, ep_len = False, False, 0
     ret_vec = None
     ext_ret_vec = None
+    ep_len = 0
 
     while not (done or trunc):
         a = policy.act(s)
@@ -50,4 +51,9 @@ def rollout(env, policy, learn: bool = True) -> Tuple[np.ndarray, int, np.ndarra
         s = s2
         ep_len += 1
 
+        if max_ep_len > 0 and ep_len >= max_ep_len:
+            trunc = True
+
+    if ep_len != max_ep_len:
+        print(f"Warning: Episode ended at {ep_len} steps, not {max_ep_len}.")
     return ret_vec, ep_len, ext_ret_vec

@@ -55,6 +55,7 @@ class ERLManager:
                                             device=device) 
                                             for _ in range(cfg["pderl"]["pop_size"])]
         
+        self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
         self.gen_counter = 0
         self.migrate_every = int(cfg["pderl"].get("migrate_every_gens", 5))
 
@@ -72,7 +73,7 @@ class ERLManager:
                                         device=self.worker.device)
         rl_actor.load_flat_params(flat)
         # seed buffer with one rollout so proximal mutation works next gen
-        rollout(self.env, rl_actor, learn=True)
+        rollout(self.env, rl_actor, learn=True, max_ep_len=self.max_ep_len)
         return rl_actor
     
     # ---- helper for greedy parent selection ------------------------- #
@@ -99,7 +100,7 @@ class ERLManager:
     # ------------------------------------------------------------------ #
     # ----------  Warm-up generation loop  ------------------------------ #
     # ------------------------------------------------------------------ #
-    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 1) -> Dict:
+    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
         """
         Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online, and 
         perform one generation for the EA by evaluating each actor for ea_episodes_per_actor episodes.
@@ -115,7 +116,7 @@ class ERLManager:
         """
         # Run the gradient step on the worker
         for _ in range(dqn_episodes):
-            ret_vec, ep_len, ext_ret_vec = rollout(self.env, self.worker, learn=True)
+            ret_vec, ep_len, ext_ret_vec = rollout(self.env, self.worker, learn=True, max_ep_len=self.max_ep_len)
             ret_scalar = float((ret_vec * self.w).sum())
 
             self.vector_returns.append(ret_vec)
@@ -125,7 +126,8 @@ class ERLManager:
         stats, eval_frames = eval_pop.eval_pop(self.pop,
                                                env=self.env,
                                                weight_vector=self.w,
-                                               episodes_per_actor=ea_episodes_per_actor)
+                                               episodes_per_actor=ea_episodes_per_actor,
+                                               max_ep_len=self.max_ep_len)
         self.frames_collected += eval_frames
 
         # ---------- logging ------------------------------------------ #

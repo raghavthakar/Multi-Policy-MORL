@@ -46,3 +46,4 @@ env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
   beta_novelty: 0.05             # intrinsic-reward scale
+  max_ep_len: 55                # max episode length, -1 for no limit

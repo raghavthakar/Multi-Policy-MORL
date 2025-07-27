@@ -73,11 +73,11 @@ class ERLManager:
                                         device=self.worker.device)
         rl_actor.load_flat_params(flat)
         # seed buffer with one rollout so proximal mutation works next gen
-        rollout(self.env, rl_actor, learn=True, max_ep_len=self.max_ep_len)
+        # rollout(self.env, rl_actor, learn=True, max_ep_len=self.max_ep_len)
         return rl_actor
     
     # ---- helper for greedy parent selection ------------------------- #
-    def _pick_parents(self, elite):
+    def _pick_parents(self, elite): # TODO: make the selection based on fitness? Instead of rank?
         """
         Choose two *distinct* parents from the `elite` list.
         Probability ∝ (mu – rank + 1) where rank=1 is best.
@@ -100,7 +100,7 @@ class ERLManager:
     # ------------------------------------------------------------------ #
     # ----------  Warm-up generation loop  ------------------------------ #
     # ------------------------------------------------------------------ #
-    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
+    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict: # TODO: 1/3 elite preservation, 1/3 crossover, 1/3 mutation?
         """
         Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online, and 
         perform one generation for the EA by evaluating each actor for ea_episodes_per_actor episodes.
@@ -135,7 +135,7 @@ class ERLManager:
             print(f"Weight {self.w} vector return: {ind.vector_return}, ")
 
         # ---------- evolutionary step -------------------------------- #
-        mu = max(1, len(self.pop)//2)                      # retain top half
+        mu = max(1, len(self.pop)//3)                      # retain top third of population
         elite = selection.elitist_select(self.pop, mu)
 
         # (mu − 1) crossover offspring
@@ -147,13 +147,15 @@ class ERLManager:
                                                    self.cfg["pderl"],
                                                    device=self.worker.device)
             offsprings.append(child)
-
-        # population = elites + offspring   (size = mu + mu-1 = n-1)
-        self.pop = elite + offsprings
-
-        # mutate every genome currently in pop
-        proximal_mutation.proximal_mutate(self.pop, self.worker.critic(),
+        
+        # mutate a copy of mu elites
+        mutated_elites = [actor.clone() for actor in elite]
+        # mutate
+        proximal_mutation.proximal_mutate(mutated_elites, self.worker.critic(),
                                           sigma=self.cfg["pderl"].get("sigma",0.02))
+
+        # population = elites + offspring + mutated_elites  (size = mu + mu + mu-1 = n-1)
+        self.pop = elite + offsprings + mutated_elites
 
         # RL → GA migration every gen (adds 1, size back to n)
         rl_actor = self._make_rl_actor()

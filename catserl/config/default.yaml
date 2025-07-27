@@ -27,7 +27,7 @@ dqn:
 # -------------------------------------------------
 # PDERL parameters   (pderl/)
 pderl:
-  pop_size:          10         # subpopulation size of each pderl island
+  pop_size:          12         # subpopulation size of each pderl island
   migrate_every_gens:  5     # copy RL actor into EA population every X generations
   bc_epochs:    1
   bc_batch:     256
@@ -46,4 +46,4 @@ env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
   beta_novelty: 0.05             # intrinsic-reward scale
-  max_ep_len: 55                # max episode length, -1 for no limit
+  max_ep_len: 25                # max episode length, -1 for no limit

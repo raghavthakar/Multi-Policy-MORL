@@ -128,3 +128,6 @@ Sparse-MORL.code-workspace
 
 # Reproducibility test for seedign
 test_reproducibility.sh
+
+# Writing prototype
+writing.md

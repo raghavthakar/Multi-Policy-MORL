@@ -122,3 +122,9 @@ dmypy.json
 
 #MOPDERL
 mopderl
+
+# Workspace vs code layout
+Sparse-MORL.code-workspace
+
+# Reproducibility test for seedign
+test_reproducibility.sh

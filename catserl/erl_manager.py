@@ -1,8 +1,7 @@
 # catserl/erl_manager.py
 from __future__ import annotations
 from typing import List, Dict
-import numpy as np
-import torch
+import numpy as np, random, torch
 
 from catserl.envs.four_room import FourRoomWrapper
 from catserl.rl.dqn import RLWorker
@@ -42,6 +41,10 @@ class ERLManager:
         """
         self.cfg = cfg
         self.env = FourRoomWrapper(seed=seed, beta=cfg["env"]["beta_novelty"])
+        # -------------------------------------------------------------- #
+        # local deterministic RNG for this island
+        self.rs = np.random.RandomState(seed)
+        # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
 
         self.worker = RLWorker(self.env.observation_space.shape,
@@ -88,12 +91,12 @@ class ERLManager:
         probs = (mu - ranks + 1) / total               # higher rank → higher prob
 
         # first parent
-        idx_a = np.random.choice(mu, p=probs)
+        idx_a = self.rs.choice(mu, p=probs)
 
         # second parent: draw again until different index
         idx_b = idx_a
         while idx_b == idx_a:
-            idx_b = np.random.choice(mu, p=probs)
+            idx_b = self.rs.choice(mu, p=probs)
 
         return elite[idx_a], elite[idx_b]
 

@@ -13,8 +13,8 @@ from __future__ import annotations
 from typing import Tuple, Optional
 import torch, numpy as np
 
-from catserl.policy.discrete_mlp import DiscreteActor
-from catserl.data.buffers import MiniBuffer
+from catserl.shared.policy.discrete_mlp import DiscreteActor
+from catserl.shared.data.buffers import MiniBuffer
 
 
 class GeneticActor:

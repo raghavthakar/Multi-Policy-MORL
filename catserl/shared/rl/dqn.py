@@ -7,8 +7,8 @@ import torch
 import torch.nn.functional as F
 from torch.optim import Adam
 
-from catserl.data.buffers import ReplayBuffer
-from catserl.policy.discrete_mlp import DuelingQNet
+from catserl.shared.data.buffers import ReplayBuffer
+from catserl.shared.policy.discrete_mlp import DuelingQNet
 
 
 class RLWorker:

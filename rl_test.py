@@ -1,19 +1,19 @@
 import yaml, torch, numpy as np, random
 from catserl.erl_manager import ERLManager
-from catserl.utils.seeding import seed_everything
+from catserl.shared.utils.seeding import seed_everything
 
-cfg = yaml.safe_load(open("catserl/config/default.yaml"))
+cfg = yaml.safe_load(open("catserl/shared/config/default.yaml"))
 seed = cfg["seed"]
 seed_everything(seed)
 
 device = torch.device(cfg["device"])
 
-mgr0 = ERLManager(np.array([1, 0, 0]), cfg,
+mgr0 = ERLManager(np.array([0, 1, 0]), cfg,
                   seed=seed + 1, device=device)
 # mgr1 = ERLManager(np.array([0, 1, 0]), cfg,
 #                   seed=seed + 2, device=device)
 
-for gen in range(50):          # generations = episodes in this mini demo
+for gen in range(500):          # generations = episodes in this mini demo
     mgr0.train_generation()
     # mgr1.train_generation()
 

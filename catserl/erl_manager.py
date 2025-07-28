@@ -4,9 +4,9 @@ from typing import List, Dict
 import numpy as np, random, torch
 import hashlib
 
-from catserl.envs.four_room import FourRoomWrapper
-from catserl.rl.dqn import RLWorker
-from catserl.envs.rollout import rollout
+from catserl.shared.envs.four_room import FourRoomWrapper
+from catserl.shared.rl.dqn import RLWorker
+from catserl.shared.envs.rollout import rollout
 from catserl.pderl import eval_pop, population, proximal_mutation, selection, crossover
 
 

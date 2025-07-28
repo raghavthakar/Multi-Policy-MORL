@@ -9,7 +9,7 @@ import numpy as np
 
 from catserl.pderl.population import GeneticActor
 from catserl.pderl.selection import elitist_select
-from catserl.envs.rollout import rollout
+from catserl.shared.envs.rollout import rollout
 
 
 def eval_pop(pop: List[GeneticActor],

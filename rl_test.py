@@ -1,5 +1,5 @@
 import yaml, torch, numpy as np, random
-from catserl.erl_manager import ERLManager
+from catserl.pderl.erl_manager import ERLManager
 from catserl.shared.utils.seeding import seed_everything
 
 cfg = yaml.safe_load(open("catserl/shared/config/default.yaml"))

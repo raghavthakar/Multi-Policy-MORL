@@ -160,9 +160,22 @@ class ERLManager:
         # population = elites + offspring + mutated_elites  (size = mu + mu + mu-1 = n-1)
         self.pop = elite + offsprings + mutated_elites
 
-        # RL → GA migration every gen (adds 1, size back to n)
-        rl_actor = self._make_rl_actor()
-        self.pop.append(rl_actor)
+        # RL → GA migration only every migrate_every generations
+        if self.gen_counter % self.migrate_every == 0:
+            rl_actor = self._make_rl_actor()
+            self.pop.append(rl_actor)
+        else:
+            # produce an extra crossover offspring to keep population size constant
+            if len(elite) > 1:
+                pa, pb = self._pick_parents(elite)
+                child = crossover.distilled_crossover(pa, pb,
+                                                      self.worker.critic(),
+                                                      self.cfg["pderl"],
+                                                      device=self.worker.device)
+                self.pop.append(child)
+            else:
+                # fallback: clone an elite if not enough parents
+                self.pop.append(elite[0].clone())
 
         self.gen_counter += 1
 

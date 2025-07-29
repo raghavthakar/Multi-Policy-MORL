@@ -15,7 +15,7 @@ from typing import List
 import numpy as np
 import pygmo as pg  # hard dependency
 
-from catserl.island.population import GeneticActor  # adjust path if moved
+from catserl.island.genetic_actor import GeneticActor  # adjust path if moved
 
 
 # ------------------------------------------------------------------ #

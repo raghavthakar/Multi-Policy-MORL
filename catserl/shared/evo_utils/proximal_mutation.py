@@ -10,7 +10,7 @@ where  J = ∂Q(s, πθ(s)) / ∂θ   averaged over a mini-batch of states.
 from __future__ import annotations
 from typing import List
 import torch, numpy as np
-from catserl.island.population import GeneticActor
+from catserl.island.genetic_actor import GeneticActor
 
 
 # --------------------------------------------------------------------------- #

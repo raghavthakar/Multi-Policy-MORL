@@ -4,7 +4,7 @@ from typing import Dict
 import torch, numpy as np
 import torch.nn.functional as F
 
-from catserl.island.population import GeneticActor
+from catserl.island.genetic_actor import GeneticActor
 
 
 def distilled_crossover(parent1: GeneticActor,

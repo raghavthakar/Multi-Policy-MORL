@@ -8,7 +8,7 @@ from catserl.shared.envs.four_room import FourRoomWrapper
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl.dqn import RLWorker
 from catserl.shared.envs.rollout import rollout
-from catserl.island import population
+from catserl.island import genetic_actor
 
 
 class IslandManager:
@@ -55,7 +55,7 @@ class IslandManager:
                                cfg["dqn"],
                                device)
         
-        self.pop = [population.GeneticActor(self.env.observation_space.shape, 
+        self.pop = [genetic_actor.GeneticActor(self.env.observation_space.shape, 
                                             self.env.action_space.n, 
                                             device=device) 
                                             for _ in range(cfg["pderl"]["pop_size"])]
@@ -75,7 +75,7 @@ class IslandManager:
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
         flat, hid = self.worker.export_policy_params()
-        rl_actor = population.GeneticActor(self.env.observation_space.shape,
+        rl_actor = genetic_actor.GeneticActor(self.env.observation_space.shape,
                                            self.env.action_space.n,
                                            hidden_dim=hid,
                                            device=self.worker.device)
@@ -208,3 +208,19 @@ class IslandManager:
     def get_migration_log(self):
         """Return the migration log for RL→GA events."""
         return self.migration_log
+    
+    def export_island(self):
+        """
+        Export the current state of the island, including the population,
+        the RL worker's critic, and the scalarising weight vector.
+
+        Returns
+        -------
+        pop : list of GeneticActor
+            The current population of genetic actors.
+        critic : torch.nn.Module
+            The critic network used by the RL worker.
+        w : np.ndarray
+            The scalarising weight vector for this island.
+        """
+        return self.pop, self.worker.critic(), self.w

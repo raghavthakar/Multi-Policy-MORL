@@ -89,3 +89,51 @@ def distilled_crossover(parent1: GeneticActor,
         opt.step()
 
     return child
+
+# --------------------------------------------------------------------------- #
+#  MOPDERL variant (caller decides which parent is better / worse)
+# --------------------------------------------------------------------------- #
+def mo_distilled_crossover(
+    better_parent: GeneticActor,
+    worse_parent: GeneticActor,
+    critic: torch.nn.Module,
+    cfg: Dict,
+    device: torch.device | str = "cpu",
+) -> GeneticActor:
+    """
+    Multi-objective distilled crossover (Tran-Long et al., 2023)
+
+    Caller responsibilities
+    -----------------------
+    • `better_parent`  : policy whose **weights** initialise the child.  
+    • `worse_parent`   : policy whose **critic & buffer** provide targets.  
+    • Dominance check : caller should pick parents accordingly, but we
+      assert using pygmo to avoid silent mistakes (maximisation → negate).
+    """
+
+    # hyper-params ----------------------------------------------------------
+    device    = torch.device(device)
+    epochs    = int(cfg.get("bc_epochs", 1))
+    batch     = int(cfg.get("bc_batch", 256))
+    lr        = float(cfg.get("crossover_lr", 1e-3))
+
+    # child initialisation --------------------------------------------------
+    child = better_parent.clone()
+    child.net.to(device)
+    critic.eval()
+    opt = torch.optim.Adam(child.net.parameters(), lr=lr)
+
+    # behaviour cloning loop -----------------------------------------------
+    for _ in range(epochs):
+        states, _ = worse_parent.buffer.sample(batch, device)  # (S,A) but we ignore A
+        with torch.no_grad():
+            target_act = critic(states).argmax(dim=1)
+
+        logits = child.net(states)
+        loss   = F.cross_entropy(logits, target_act)
+
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+    return child

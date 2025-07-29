@@ -1,5 +1,5 @@
 import yaml, torch, numpy as np, random
-from catserl.pderl.erl_manager import ERLManager
+from catserl.island.island_manager import IslandManager
 from catserl.shared.utils.seeding import seed_everything
 
 cfg = yaml.safe_load(open("catserl/shared/config/default.yaml"))
@@ -8,7 +8,7 @@ seed_everything(seed)
 
 device = torch.device(cfg["device"])
 
-mgr0 = ERLManager(np.array([0, 1, 0]), cfg,
+mgr0 = IslandManager(np.array([0, 1, 0]), cfg,
                   seed=seed + 1, device=device)
 # mgr1 = ERLManager(np.array([0, 1, 0]), cfg,
 #                   seed=seed + 2, device=device)

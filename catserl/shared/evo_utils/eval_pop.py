@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import List, Dict
 import numpy as np
 
-from catserl.pderl.population import GeneticActor
+from catserl.island.population import GeneticActor
 from catserl.shared.evo_utils.selection import elitist_select
 from catserl.shared.envs.rollout import rollout
 

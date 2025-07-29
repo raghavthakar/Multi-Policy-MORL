@@ -8,10 +8,10 @@ from catserl.shared.envs.four_room import FourRoomWrapper
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl.dqn import RLWorker
 from catserl.shared.envs.rollout import rollout
-from catserl.pderl import population
+from catserl.island import population
 
 
-class ERLManager:
+class IslandManager:
     """
     Warm-up “island” that owns
       • ONE private env instance

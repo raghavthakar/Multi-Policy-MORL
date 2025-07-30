@@ -16,7 +16,7 @@ class IslandManager:
     Warm-up “island” that owns
       • ONE private env instance
       • ONE RLWorker trained on a scalar weight vector
-      • (later) a GA sub-population and PDERL operators
+      • A GA sub-population and PDERL operators
 
     Public API kept minimal so the global orchestrator can treat all
     objectives uniformly.
@@ -223,9 +223,11 @@ class IslandManager:
         -------
         pop : list of GeneticActor
             The current population of genetic actors.
+        island_id: int
+            The identifier for the island.
         critic : torch.nn.Module
             The critic network used by the RL worker.
         w : np.ndarray
             The scalarising weight vector for this island.
         """
-        return self.pop, self.worker.critic(), self.w
+        return self.pop, self.island_id, self.worker.critic(), self.w

@@ -24,6 +24,7 @@ class IslandManager:
 
     # ------------------------------------------------------------------ #
     def __init__(self,
+                 island_id: int,
                  scalar_weight: np.ndarray,
                  cfg: Dict,
                  seed: int,
@@ -31,6 +32,8 @@ class IslandManager:
         """
         Parameters
         ----------
+        island_id : int
+            A unique identifier for the island.
         scalar_weight : np.ndarray
             One-hot (or general) weight vector w_j used to scalarise reward.
         cfg : dict
@@ -41,6 +44,7 @@ class IslandManager:
         device : torch.device
             Where the networks live.
         """
+        self.island_id = island_id
         self.cfg = cfg
         self.env = FourRoomWrapper(seed=seed, beta=cfg["env"]["beta_novelty"])
         # -------------------------------------------------------------- #
@@ -55,10 +59,10 @@ class IslandManager:
                                cfg["dqn"],
                                device)
         
-        self.pop = [genetic_actor.GeneticActor(self.env.observation_space.shape, 
-                                            self.env.action_space.n, 
-                                            device=device) 
-                                            for _ in range(cfg["pderl"]["pop_size"])]
+        self.pop = [genetic_actor.GeneticActor(self.island_id, 
+                                               self.env.observation_space.shape, 
+                                               self.env.action_space.n, 
+                                               device=device) for _ in range(cfg["pderl"]["pop_size"])]
         
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
         self.gen_counter = 0
@@ -75,10 +79,11 @@ class IslandManager:
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
         flat, hid = self.worker.export_policy_params()
-        rl_actor = genetic_actor.GeneticActor(self.env.observation_space.shape,
-                                           self.env.action_space.n,
-                                           hidden_dim=hid,
-                                           device=self.worker.device)
+        rl_actor = genetic_actor.GeneticActor(self.island_id, 
+                                              self.env.observation_space.shape,
+                                              self.env.action_space.n,
+                                              hidden_dim=hid,
+                                              device=self.worker.device)
         rl_actor.load_flat_params(flat)
         # seed buffer with one rollout so proximal mutation works next gen
         # rollout(self.env, rl_actor, learn=True, max_ep_len=self.max_ep_len)

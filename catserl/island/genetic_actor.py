@@ -20,12 +20,14 @@ from catserl.shared.data.buffers import MiniBuffer
 class GeneticActor:
     # ------------------------------------------------------------------ #
     def __init__(self,
+                 pop_id: int | None,
                  obs_shape: Tuple[int, ...],
                  n_actions: int,
                  hidden_dim: int = 128,
                  buffer_size: int = 8_192,
                  device: str | torch.device = "cpu"):
         # immutable meta
+        self.pop_id = pop_id
         self.obs_shape  = obs_shape
         self.n_actions  = n_actions
         self.hidden_dim = hidden_dim

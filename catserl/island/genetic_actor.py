@@ -82,7 +82,8 @@ class GeneticActor:
     # Deep clone (new buffer, copied weights)
     # ------------------------------------------------------------------ #
     def clone(self) -> "GeneticActor":
-        clone = GeneticActor(self.obs_shape,
+        clone = GeneticActor(self.pop_id,
+                             self.obs_shape,
                              self.n_actions,
                              self.hidden_dim,
                              buffer_size=self.buffer.max_steps,

@@ -85,15 +85,25 @@ class MOManager:
         mu = len(self.pop) // 2
         elite = selection.nondominated_select(self.pop, mu)
 
+        # Sort elites by NSGA-II rank and crowding distance using maximisation (negate objectives)
+        negated_points = [[-v for v in x.vector_return] for x in elite]
+        sorted_indices = pygmo.sort_population_mo(negated_points)
+        elite_to_rank = {elite[idx]: rank for rank, idx in enumerate(sorted_indices)}
+
         # 3. Produce μ children via MO-distilled crossover
         children: List[GeneticActor] = []
         while len(children) < mu:
             pa, pb = random.sample(elite, 2)
 
-            # Decide Pareto-better vs worse
-            if dominates(pb.vector_return, pa.vector_return):
+            # Decide better vs worse based on sort_population_mo rank
+            rank_pa = elite_to_rank[pa]
+            rank_pb = elite_to_rank[pb]
+            if rank_pa < rank_pb:
+                better, worse = pa, pb
+            elif rank_pb < rank_pa:
                 better, worse = pb, pa
             else:
+                # If ranks are equal, break ties arbitrarily (keep order)
                 better, worse = pa, pb
 
             worse_critic = critics[worse.pop_id]          # fetch critic by id
@@ -113,7 +123,7 @@ class MOManager:
         proximal_mutation.proximal_mutate(
             elite + children,
             critics[elite[0].pop_id],
-            sigma=self.cfg["pderl"]["sigma"],
+            # sigma=self.cfg["pderl"]["sigma"],
         )
 
         # 5. Update population  (size unchanged: μ elites + μ children)

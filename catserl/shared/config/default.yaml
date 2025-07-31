@@ -34,6 +34,12 @@ pderl:
   crossover_lr: 1e-3
 
 # -------------------------------------------------
+# MOPDERL parameters   (pderl/)
+mopderl:
+  episodes_per_actor: 5   # (example value, set as appropriate)
+
+
+# -------------------------------------------------
 #  Buffers for genetic actors (data/buffers.py)
 # -------------------------------------------------
 mini_buffer_size: 8192          # per-genome circular buffer length

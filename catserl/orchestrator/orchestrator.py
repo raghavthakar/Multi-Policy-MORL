@@ -1,6 +1,7 @@
 import yaml, torch, numpy as np, random
 from catserl.island.island_manager import IslandManager
 from catserl.shared.utils.seeding import seed_everything
+from catserl.moea.mo_manager import MOManager
 
 cfg = yaml.safe_load(open("catserl/shared/config/default.yaml"))
 seed = cfg["seed"]
@@ -8,10 +9,10 @@ seed_everything(seed)
 
 device = torch.device(cfg["device"])
 
-mgr0 = IslandManager(np.array([1, 0, 0]), cfg, seed=seed + 1, device=device)
-mgr1 = IslandManager(np.array([0, 1, 0]), cfg, seed=seed + 2, device=device)
+mgr0 = IslandManager(1, np.array([1, 0, 0]), cfg, seed=seed + 1, device=device)
+mgr1 = IslandManager(2, np.array([0, 1, 0]), cfg, seed=seed + 2, device=device)
 
-for gen in range(50):          # generations = episodes in this mini demo
+for gen in range(5):          # generations = episodes in this mini demo
     mgr0.train_generation()
     mgr1.train_generation()
 
@@ -21,5 +22,16 @@ for gen in range(50):          # generations = episodes in this mini demo
             # f"| Obj-1 10-ep mean: {np.mean(mgr1.get_scalar_returns()[-10:]):.2f}")
 
 # After 500 generations, combine the populations of both islands
-mgr0.pop = mgr0.pop + mgr1.pop
-print(f"Combined population size: {len(mgr0.pop)}")
+pop0, id0, critic0, w0 = mgr0.export_island()
+pop1, id1, critic1, w1 = mgr1.export_island()
+
+combined_pop = pop0 + pop1
+critics_dict = {
+    id0 : critic0,
+    id1 : critic1
+}
+
+# Stage-2: Multi-objective evolution on merged population
+mo_mgr = MOManager(combined_pop, cfg, device=device)
+mo_mgr.evolve(50, critics_dict)
+print("MOManager evolution on merged population complete.")

@@ -13,9 +13,20 @@ from typing import Tuple, Any
 import numpy as np
 
 
-def rollout(env, policy, learn: bool = True, max_ep_len: int = -1) -> Tuple[np.ndarray, int, np.ndarray]:
+def rollout(env, actor, learn: bool = True, max_ep_len: int = -1, other_actor=None) -> Tuple[np.ndarray, int, np.ndarray]:
     """
     Runs ONE episode and (optionally) lets the policy learn online.
+    
+    Parameters
+    ----------
+    env : environment instance
+    actor : Genetic/DQN actor that is being rolled out
+    learn : bool, optional
+        Whether to let the policy learn online (default: True)
+    max_ep_len : int, optional
+        Maximum episode length (default: -1, meaning no limit)
+    other_actor : policy instance, optional
+        If provided, calls other_actor.remember(s, a, r_vec, s2, done) at each step (default: None)
 
     Returns
     -------
@@ -30,7 +41,7 @@ def rollout(env, policy, learn: bool = True, max_ep_len: int = -1) -> Tuple[np.n
     ep_len = 0
 
     while not (done or trunc):
-        a = policy.act(s)
+        a = actor.act(s)
         s2, r_vec, done, trunc, info = env.step(a)
 
         if ret_vec is None:
@@ -43,10 +54,12 @@ def rollout(env, policy, learn: bool = True, max_ep_len: int = -1) -> Tuple[np.n
         else:
             ext_ret_vec += info["extrinsic"]
 
-        if learn and hasattr(policy, "remember"):
-            policy.remember(s, a, r_vec, s2, done or trunc)
-            if hasattr(policy, "update"):
-                policy.update()
+        if learn and hasattr(actor, "remember"):
+            actor.remember(s, a, r_vec, s2, done or trunc)
+            if other_actor is not None and hasattr(other_actor, "remember"):
+                other_actor.remember(s, a, r_vec, s2, done or trunc)
+            if hasattr(actor, "update"):
+                actor.update()
 
         s = s2
         ep_len += 1

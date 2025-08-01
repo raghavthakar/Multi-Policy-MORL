@@ -16,9 +16,32 @@ def eval_pop(pop: List[GeneticActor],
                 env,
                 weight_vector: np.ndarray,
                 episodes_per_actor: int = 1,
-                max_ep_len: int = -1) -> Dict:
+                max_ep_len: int = -1,
+                rl_worker=None) -> Dict:
     """
     Returns simple stats; population's fitnesses are modified in-place.
+
+    Parameters
+    ----------
+    pop : List[GeneticActor]
+        Population of genetic actors to evaluate.
+    env : environment instance
+        The environment to use for evaluation.
+    weight_vector : np.ndarray
+        Weight vector for scalarizing returns.
+    episodes_per_actor : int, optional
+        Number of episodes per actor (default: 1).
+    max_ep_len : int, optional
+        Maximum episode length (default: -1, meaning no limit).
+    rl_worker : RLWorker, optional
+        If provided, will be supplied as 'other_actor' to rollout so it can observe transitions (default: None).
+
+    Returns
+    -------
+    stats : dict
+        Dictionary with mean, max fitness, and population size.
+    frames_collected : int
+        Total frames collected during evaluation.
     """
     w = weight_vector
     fitness_vals = []
@@ -27,7 +50,9 @@ def eval_pop(pop: List[GeneticActor],
     for actor in pop:
         vec_return = np.zeros_like(w, dtype=np.float32)
         for _ in range(episodes_per_actor):
-            ret_vec, ep_len, _ = rollout(env, actor, learn=True, max_ep_len=max_ep_len) # NOTE: Set learn=True to update actor's buffer
+            ret_vec, ep_len, _ = rollout(
+                env, actor, learn=True, max_ep_len=max_ep_len, other_actor=rl_worker
+            )  # NOTE: Set learn=True to update actor's buffer
             vec_return += ret_vec
             frames_collected += ep_len
 

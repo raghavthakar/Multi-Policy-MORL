@@ -109,3 +109,21 @@ class MiniBuffer:
         s = torch.from_numpy(self.states[idxs]).float().to(device)
         a = torch.from_numpy(self.actions[idxs]).long().to(device)
         return s, a
+    
+    # ------------------------------------------------------------------ #
+    def shuffle(self):
+        """
+        In-place random permutation of all *valid* entries.
+
+        • Does nothing if the buffer holds < 2 samples.  
+        • Leaves `ptr` and `full` unchanged, so chronology resumes correctly
+          for any new transitions appended after the shuffle.
+        """
+        length = len(self)           # valid slice: 0 … length-1
+        if length < 2:
+            return
+
+        perm = np.random.permutation(length)
+        # When full, length == self.max_steps; otherwise == self.ptr
+        self.states[:length]  = self.states[perm]
+        self.actions[:length] = self.actions[perm]

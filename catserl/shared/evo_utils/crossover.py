@@ -6,6 +6,41 @@ import torch.nn.functional as F
 
 from catserl.island.genetic_actor import GeneticActor
 
+def fill_child_buffer_from_parents(child, parent1, parent2):
+    """
+    Fill child's MiniBuffer with the latest transitions from both parents, in equal proportions.
+    """
+    buf_size = child.buffer.max_steps
+    n1 = min(len(parent1.buffer), buf_size // 2)
+    n2 = min(len(parent2.buffer), buf_size - n1)
+
+    def get_latest_states_actions(parent, n):
+        buf = parent.buffer
+        length = len(buf)
+        if length == 0 or n == 0:
+            return np.empty((0, *buf.states.shape[1:]), dtype=buf.states.dtype), np.empty((0,), dtype=buf.actions.dtype)
+        if buf.full:
+            # Circular buffer: latest n are from (ptr-n)%max_steps to ptr-1
+            idxs = (np.arange(buf.ptr - n, buf.ptr) % buf.max_steps)
+            return buf.states[idxs], buf.actions[idxs]
+        else:
+            return buf.states[max(0, length - n):length], buf.actions[max(0, length - n):length]
+
+    # Get latest transitions
+    s1, a1 = get_latest_states_actions(parent1, n1)
+    s2, a2 = get_latest_states_actions(parent2, n2)
+
+    # Concatenate
+    states = np.concatenate([s1, s2], axis=0)
+    actions = np.concatenate([a1, a2], axis=0)
+
+    # Reset child's buffer
+    child.buffer.ptr = 0
+    child.buffer.full = False
+
+    # Add transitions to child's buffer
+    for s, a in zip(states, actions):
+        child.buffer.add(s, a)
 
 def distilled_crossover(parent1: GeneticActor,
                         parent2: GeneticActor,
@@ -39,9 +74,12 @@ def distilled_crossover(parent1: GeneticActor,
     fitter, other = (parent1, parent2) if p1_fit >= p2_fit else (parent2, parent1)
 
     child = fitter.clone()          # deep copy of policy + buffer
-    child.to = lambda d: child  # simple no-op; keeps interface
     child.net.to(device)
-    critic.eval()
+    critic = critic.to(device).eval()
+
+    # Fill child's buffer with latest transitions from both parents
+    fill_child_buffer_from_parents(child, parent1, parent2)
+    child.buffer.shuffle()
 
     opt = torch.optim.Adam(child.net.parameters(), lr=lr)
 
@@ -49,27 +87,11 @@ def distilled_crossover(parent1: GeneticActor,
     # 2. Behaviour-cloning loop
     # ---------------------------------------------------------------
     for _ in range(bc_epochs):
-        # mini-batch assembly
-        need = bc_batch
-        ss, aa = [], []          # lists of states & dummy actions (unused)
-
-        # take up to half from each buffer
-        k1 = min(need // 2, len(parent1.buffer))
-        if k1:
-            s, _ = parent1.buffer.sample(k1, device)
-            ss.append(s); need -= k1
-
-        k2 = min(need, len(parent2.buffer))
-        if k2:
-            s, _ = parent2.buffer.sample(k2, device)
-            ss.append(s); need -= k2
-
-        # if still short (rare) pad with random states from fitter buffer
-        if need:
-            s, _ = fitter.buffer.sample(need, device)
-            ss.append(s)
-
-        states = torch.cat(ss, dim=0).to(device)         # [B,…]
+        # Sample a batch from the child's own buffer
+        if len(child.buffer) < bc_batch:
+            # Not enough samples, skip this epoch
+            continue
+        states, _ = child.buffer.sample(bc_batch, device)
 
         # greedy actions of both parents
         with torch.no_grad():
@@ -120,14 +142,27 @@ def mo_distilled_crossover(
     # child initialisation --------------------------------------------------
     child = better_parent.clone()
     child.net.to(device)
-    critic.eval()
+    critic = critic.to(device).eval()
+
+    # Fill child's buffer with latest transitions from both parents
+    fill_child_buffer_from_parents(child, better_parent, worse_parent)
+    child.buffer.shuffle()
+
     opt = torch.optim.Adam(child.net.parameters(), lr=lr)
 
     # behaviour cloning loop -----------------------------------------------
     for _ in range(epochs):
-        states, _ = worse_parent.buffer.sample(batch, device)  # (S,A) but we ignore A
+        # Sample a batch from the child's own buffer
+        if len(child.buffer) < batch:
+            continue
+        states, _ = child.buffer.sample(batch, device)
         with torch.no_grad():
-            target_act = critic(states).argmax(dim=1)
+            a_better = better_parent.net(states).argmax(dim=1)   # greedy actions
+            a_worse  = worse_parent .net(states).argmax(dim=1)
+            q_vals   = critic(states)                            # [B, |A|]
+            q_better = q_vals.gather(1, a_better.unsqueeze(1)).squeeze(1)
+            q_worse  = q_vals.gather(1, a_worse .unsqueeze(1)).squeeze(1)
+            target_act = torch.where(q_better >= q_worse, a_better, a_worse)
 
         logits = child.net(states)
         loss   = F.cross_entropy(logits, target_act)

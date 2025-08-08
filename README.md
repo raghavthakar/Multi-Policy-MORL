@@ -1,2 +1,2 @@
-# Sparse-MORL
-Multi-policy multi-objective reinforcement learning under reward sparsity
+# Multi-Policy-MORL
+Multi-policy multi-objective reinforcement learning for continuous control tasks.

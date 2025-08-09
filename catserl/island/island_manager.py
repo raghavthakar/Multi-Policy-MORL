@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Dict
 import numpy as np, random, torch
 import hashlib
+import mo_gymnasium as mo_gym
 
 from catserl.shared.envs.envs import FourRoomWrapper
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
@@ -24,6 +25,7 @@ class IslandManager:
 
     # ------------------------------------------------------------------ #
     def __init__(self,
+                 env,
                  island_id: int,
                  scalar_weight: np.ndarray,
                  cfg: Dict,
@@ -32,6 +34,8 @@ class IslandManager:
         """
         Parameters
         ----------
+        env: mo_gymnasium env
+            E.g.: run mo_gymnasium.make("mo-mountaincar-v0") to get an env.
         island_id : int
             A unique identifier for the island.
         scalar_weight : np.ndarray
@@ -46,7 +50,7 @@ class IslandManager:
         """
         self.island_id = island_id
         self.cfg = cfg
-        self.env = FourRoomWrapper(seed=seed, beta=cfg["env"]["beta_novelty"])
+        self.env = env
         # -------------------------------------------------------------- #
         # local deterministic RNG for this island
         self.rs = np.random.RandomState(seed)
@@ -85,8 +89,6 @@ class IslandManager:
                                               hidden_dim=hid,
                                               device=self.worker.device)
         rl_actor.load_flat_params(flat)
-        # seed buffer with one rollout so proximal mutation works next gen
-        # rollout(self.env, rl_actor, learn=True, max_ep_len=self.max_ep_len)
         return rl_actor
 
     # ---- helper for greedy parent selection ------------------------- #
@@ -124,16 +126,20 @@ class IslandManager:
               "frames": int,
             }
         """
-        # Run the gradient step on the worker
+        # Collect experiences for the RL actor
         for _ in range(dqn_episodes):
-            ret_vec, ep_len, ext_ret_vec = rollout(
-                self.env, self.worker, learn=True, max_ep_len=self.max_ep_len
+            ret_vec, ep_len = rollout(
+                self.env, self.worker, store_transitions=True, max_ep_len=self.max_ep_len
             )
             ret_scalar = float((ret_vec * self.w).sum())
 
             self.vector_returns.append(ret_vec)
             self.scalar_returns.append(ret_scalar)
             self.frames_collected += ep_len
+        
+        # Update the RL actor
+        for _ in range(15): # NOTE: Change this to a number from the configs
+            self.worker.update()
 
         stats, eval_frames = eval_pop.eval_pop(
             self.pop,
@@ -182,18 +188,6 @@ class IslandManager:
         if migrate:
             rl_actor = self._make_rl_actor()
             self.pop.append(rl_actor)
-            # log migration event
-            flat_params = None
-            if hasattr(rl_actor, "export_flat_params"):
-                flat_params = rl_actor.export_flat_params()
-            param_hash = (
-                hashlib.md5(flat_params.tobytes()).hexdigest()
-                if flat_params is not None
-                else None
-            )
-            self.migration_log.append(
-                {"generation": self.gen_counter, "param_hash": param_hash}
-            )
 
         self.gen_counter += 1
 
@@ -209,10 +203,6 @@ class IslandManager:
 
     def get_vector_returns(self):
         return self.vector_returns
-
-    def get_migration_log(self):
-        """Return the migration log for RL→GA events."""
-        return self.migration_log
     
     def export_island(self):
         """

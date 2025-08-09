@@ -1,16 +1,24 @@
 import yaml, torch, numpy as np, random
 import mo_gymnasium as mo_gym
 from catserl.island.island_manager import IslandManager
-from catserl.shared.utils.seeding import seed_everything
 from catserl.moea.mo_manager import MOManager
 
 cfg = yaml.safe_load(open("catserl/shared/config/default.yaml"))
 seed = cfg["seed"]
-seed_everything(seed)
+
+env = mo_gym.make("mo-mountaincar-v0")
+
+# Seed everything
+random.seed(seed)
+np.random.seed(seed)
+env.reset(seed=seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 device = torch.device(cfg["device"])
 
-env = mo_gym.make("mo-mountaincar-v0")
 mgr0 = IslandManager(env, 1, np.array([1, 0, 0]), cfg, seed=seed + 1, device=device)
 mgr1 = IslandManager(env, 2, np.array([0, 1, 0]), cfg, seed=seed + 2, device=device)
 

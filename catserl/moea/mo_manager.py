@@ -15,7 +15,7 @@ import random
 import torch
 import pygmo
 
-from catserl.shared.envs.four_room import FourRoomWrapper
+from catserl.shared.envs.envs import FourRoomWrapper
 from catserl.island.genetic_actor import GeneticActor
 from catserl.shared.evo_utils import selection, crossover, proximal_mutation, eval_pop
 

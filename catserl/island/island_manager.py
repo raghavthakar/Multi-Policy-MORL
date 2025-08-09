@@ -4,7 +4,7 @@ from typing import List, Dict
 import numpy as np, random, torch
 import hashlib
 
-from catserl.shared.envs.four_room import FourRoomWrapper
+from catserl.shared.envs.envs import FourRoomWrapper
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl.dqn import RLWorker
 from catserl.shared.envs.rollout import rollout

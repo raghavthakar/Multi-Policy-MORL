@@ -17,7 +17,6 @@ dqn:
   # replay + SGD
   buffer_size:       50_000    # main ReplayBuffer capacity
   batch_size:        32
-  update_every:      2         # env steps per TD update
 
   # ε-greedy exploration schedule
   eps_start:         1.0
@@ -27,7 +26,7 @@ dqn:
 # -------------------------------------------------
 # PDERL parameters   (pderl/)
 pderl:
-  pop_size:          12         # subpopulation size of each pderl island
+  pop_size:          0         # subpopulation size of each pderl island
   migrate_every_gens:  15     # copy RL actor into EA population every X generations
   bc_epochs:    1
   bc_batch:     256
@@ -52,4 +51,4 @@ env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
   beta_novelty: 0.05             # intrinsic-reward scale
-  max_ep_len: 20                # max episode length, -1 for no limit
+  max_ep_len: -1                # max episode length, -1 for no limit

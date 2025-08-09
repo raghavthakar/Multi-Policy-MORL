@@ -138,9 +138,9 @@ class IslandManager:
             self.frames_collected += ep_len
         
         # Update the RL actor
-        for _ in range(15): # NOTE: Change this to a number from the configs
+        for _ in range(1000): # NOTE: Change this to a number from the configs
             self.worker.update()
-
+        '''
         stats, eval_frames = eval_pop.eval_pop(
             self.pop,
             env=self.env,
@@ -188,6 +188,7 @@ class IslandManager:
         if migrate:
             rl_actor = self._make_rl_actor()
             self.pop.append(rl_actor)
+        '''
 
         self.gen_counter += 1
 

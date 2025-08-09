@@ -57,7 +57,5 @@ def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, ot
 
         if max_ep_len > 0 and ep_len >= max_ep_len:
             trunc = True
-
-    if ep_len != max_ep_len:
-        print(f"Warning: Episode ended at {ep_len} steps, not {max_ep_len}.")
+            
     return ret_vec, ep_len

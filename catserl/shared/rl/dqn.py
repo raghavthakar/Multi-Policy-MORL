@@ -73,9 +73,6 @@ class RLWorker:
     def update(self):
         if len(self.buffer) < self.batch_size:
             return
-        self.update_ctr = (self.update_ctr+1) % self.update_every
-        if self.update_ctr != 0:
-            return
 
         s, a, r_vec, s2, d = self.buffer.sample(self.batch_size)
         d = d.unsqueeze(1)                      # [B,1]

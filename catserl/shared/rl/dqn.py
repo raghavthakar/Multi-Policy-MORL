@@ -88,7 +88,7 @@ class RLWorker:
             qn = self.tgt(s2).gather(1, best_a)                    # [B,1]
             y  = r + self.gamma*(1-d)*qn
 
-        loss = F.mse_loss(q, y)
+        loss = F.smooth_l1_loss(q, y)
         self.optim.zero_grad()
         loss.backward()
         self.optim.step()

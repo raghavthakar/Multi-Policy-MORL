@@ -127,6 +127,7 @@ class IslandManager:
             }
         """
         # Collect experiences for the RL actor
+        steps_this_gen = 0
         for _ in range(dqn_episodes):
             ret_vec, ep_len = rollout(
                 self.env, self.worker, store_transitions=True, max_ep_len=self.max_ep_len
@@ -136,9 +137,11 @@ class IslandManager:
             self.vector_returns.append(ret_vec)
             self.scalar_returns.append(ret_scalar)
             self.frames_collected += ep_len
+            steps_this_gen += ep_len
         
         # Update the RL actor
-        for _ in range(1000): # NOTE: Change this to a number from the configs
+        # Update the RL actor proportionally to steps collected
+        for _ in range(steps_this_gen):
             self.worker.update()
         '''
         stats, eval_frames = eval_pop.eval_pop(

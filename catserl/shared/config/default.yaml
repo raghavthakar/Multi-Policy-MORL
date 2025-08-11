@@ -11,17 +11,17 @@ device: "cpu"           # "cpu" or "cuda"
 dqn:
   hidden_dim:        128        # width of shared + stream layers
   lr:                5e-4       # Adam LR (same for all params)
-  gamma:             0.95       # discount
+  gamma:             0.99       # discount
   tau:               0.005      # soft-update factor for target net
 
   # replay + SGD
-  buffer_size:       50_000    # main ReplayBuffer capacity
-  batch_size:        32
+  buffer_size:       100_000    # main ReplayBuffer capacity
+  batch_size:        64
 
   # ε-greedy exploration schedule
   eps_start:         1.0
-  eps_end:           0.05
-  eps_decay_frames:  3_000
+  eps_end:           0.01
+  eps_decay_frames:  100_000
 
 # -------------------------------------------------
 # PDERL parameters   (pderl/)
@@ -51,4 +51,4 @@ env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
   beta_novelty: 0.05             # intrinsic-reward scale
-  max_ep_len: -1                # max episode length, -1 for no limit
+  max_ep_len: 200               # max episode length, -1 for no limit

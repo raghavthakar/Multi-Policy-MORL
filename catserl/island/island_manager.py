@@ -224,4 +224,5 @@ class IslandManager:
         w : np.ndarray
             The scalarising weight vector for this island.
         """
+        self.pop.append(self._make_rl_actor())
         return self.pop, self.island_id, self.worker.critic(), self.w

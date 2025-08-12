@@ -12,6 +12,7 @@ A genome =  (policy  +  per‑actor replay buffer  +  bookkeeping fields)
 from __future__ import annotations
 from typing import Tuple, Optional
 import torch, numpy as np
+import copy
 
 from catserl.shared.policy.discrete_mlp import DiscreteActor
 from catserl.shared.data.buffers import MiniBuffer
@@ -81,6 +82,7 @@ class GeneticActor:
     # Deep clone (new buffer, copied weights)
     # ------------------------------------------------------------------ #
     def clone(self) -> "GeneticActor":
+        """Creates a deep clone with a copied buffer and network weights."""
         clone = GeneticActor(self.pop_id,
                              self.obs_shape,
                              self.n_actions,
@@ -89,13 +91,7 @@ class GeneticActor:
                              device=self.device)
         clone.load_flat_params(self.flat_params().clone())
         
-        # copy MiniBuffer contents
-        length = len(self.buffer)        # how many valid steps
-        if length > 0:
-            clone.buffer.states[:length]  = self.buffer.states[:length]
-            clone.buffer.actions[:length] = self.buffer.actions[:length]
-            clone.buffer.ptr              = self.buffer.ptr
-            clone.buffer.full             = self.buffer.full
+        # --- Simplified buffer cloning ---
+        clone.buffer = copy.deepcopy(self.buffer)
 
-        # evaluation stats are intentionally *not* cloned
         return clone

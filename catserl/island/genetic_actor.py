@@ -57,12 +57,11 @@ class GeneticActor:
     # ------------------------------------------------------------------ #
     # remember  (used by rollout to populate MiniBuffer)
     # ------------------------------------------------------------------ #
-    def remember(self, state, action, *unused):
+    def remember(self, state, action, r_vec, next_state, done):
         """
         rollout() calls policy.remember(s, a, r_vec, s2, done).
-        For a GeneticActor we only need (state, action).
         """
-        self.buffer.add(state, action)
+        self.buffer.add(state, action, r_vec, next_state, done)
 
     # ------------------------------------------------------------------ #
     # Flat‑parameter helpers  (for mutation & cloning)

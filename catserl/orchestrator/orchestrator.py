@@ -77,8 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
     if args.resume_stage2 is not None:
         try:
-            mo_mgr = MOManager(args.resume_stage2, device=device)
-            mo_mgr.evolve(n_points=10, include_endpoints=False)
+            mo_mgr = MOManager(env, args.resume_stage2, device=device)
+            for _ in range(5):
+                mo_mgr.evolve()
             print("MOManager Stage 2 run complete (resumed from checkpoint).")
             return 0
         except Exception as e:

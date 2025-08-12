@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import itertools
+from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple, Any, Generator, Optional
-
+from typing import Generator, Optional, Tuple, List
 import numpy as np
+
 import torch
 
 from catserl.orchestrator.checkpoint import Checkpoint
+from catserl.shared.evo_utils import eval_pop
+from catserl.island.genetic_actor import GeneticActor
 
 
 __all__ = ["MOManager"]
@@ -16,18 +20,24 @@ __all__ = ["MOManager"]
 
 class MOManager:
     """
-    Minimal MO stage manager (Stage 2).
+    Manages the multi-objective (MO) stage of training.
 
-    Current behavior (per your request):
-      • __init__: load a *merged* checkpoint (population, critics, island weights, meta)
-      • evolve: print a dyadic schedule of scalarisations (no evolution yet)
-
-    Notes
-    -----
-    - Expect the checkpoint to have been created via Checkpoint.save_merged(...)
-    - This is intentionally skeletal; you can flesh out evolve(...) next.
+    This class loads a checkpoint and provides an `evolve` method.
     """
-    def __init__(self, ckpt_path: str | Path, device: torch.device | str = "cpu") -> None:
+    def __init__(self, env, ckpt_path: str | Path, device: torch.device | str = "cpu") -> None:
+        """
+        Initializes the manager by loading a merged checkpoint.
+
+        Parameters
+        ----------
+        env:
+            mo_gym environemnt
+        ckpt_path : str | Path
+            Path to the merged checkpoint file created by Checkpoint.save_merged().
+        device : torch.device | str
+            The device to load tensors onto.
+        """
+        self.env = env
         self.device = torch.device(device)
         self.ckpt_path = Path(ckpt_path).resolve()
         print(f"[MOManager] Loading merged checkpoint from: {self.ckpt_path}")
@@ -44,74 +54,69 @@ class MOManager:
         self.meta = meta
 
         print(f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics.")
-
-    # --------------------------------------------------------------------- #
-    # Public API
-    # --------------------------------------------------------------------- #
-
-    def evolve(self, n_points: int = 8, include_endpoints: bool = False) -> None:
+    
+    # ------------------------------------------------------------------ #
+    # --- Stage 2: Step 1 Implementation (New Helper Method) ---
+    # ------------------------------------------------------------------ #
+    def _find_gap_and_select_parents(
+        self, population: List[GeneticActor]
+    ) -> Tuple[Optional[GeneticActor], Optional[GeneticActor]]:
         """
-        For now: just print a dyadic schedule of target scalarisations.
-
-        Parameters
-        ----------
-        n_points : int
-            Number of dyadic midpoints to produce (not counting endpoints by default).
-        include_endpoints : bool
-            If True, include 0.0 and 1.0 at the beginning/end of the printed schedule.
+        Finds the largest gap in the objective space and returns the two
+        actors that define that gap.
         """
-        schedule = list(self._dyadic_schedule(n_points, include_endpoints=include_endpoints))
-        print(f"[MOManager] Dyadic schedule (n={n_points}, include_endpoints={include_endpoints}):")
-        print(schedule)
+        # 1. Extract actors with valid return vectors
+        evaluated_actors = [p for p in population if p.vector_return is not None]
 
-    # --------------------------------------------------------------------- #
-    # Helpers
-    # --------------------------------------------------------------------- #
+        if len(evaluated_actors) < 2:
+            print("[MOManager] Not enough evaluated actors to find a gap.")
+            return None, None
 
-    @staticmethod
-    def _dyadic_schedule(n: int, *, include_endpoints: bool = False) -> Generator[float, None, None]:
+        # 2. Sort actors based on the first objective
+        # Creates a list of (actor, return_vector) tuples
+        actor_returns = [(p, p.vector_return) for p in evaluated_actors]
+        actor_returns.sort(key=lambda x: x[1][0])
+
+        # 3. Find the pair with the maximum Euclidean distance
+        max_dist = -1.0
+        parent_idx = -1
+        for i in range(len(actor_returns) - 1):
+            vec_a = actor_returns[i][1]
+            vec_b = actor_returns[i+1][1]
+            dist = np.linalg.norm(vec_a - vec_b)
+            
+            if dist > max_dist:
+                max_dist = dist
+                parent_idx = i
+        
+        if parent_idx == -1:
+            # This should not happen if we have at least 2 actors
+            return None, None
+
+        # 4. Select the two actors that form the largest gap
+        parent_a = actor_returns[parent_idx][0]
+        parent_b = actor_returns[parent_idx + 1][0]
+        
+        return parent_a, parent_b
+
+    def evolve(self):
         """
-        Generate the classic dyadic mid-point schedule:
-            0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875, ...
-
-        By default, endpoints 0.0 and 1.0 are omitted (you already have experts there).
-
-        Parameters
-        ----------
-        n : int
-            How many dyadic values to yield.
-        include_endpoints : bool
-            Whether to include 0.0 and 1.0 once at the ends.
-
-        Yields
-        ------
-        float
-            Next dyadic scalarisation in (0,1) (or [0,1] if include_endpoints=True).
+        Evolve the population for one generation.
         """
-        if n <= 0:
-            if include_endpoints:
-                yield 0.0
-                yield 1.0
-            return
+        # --- This call is preserved as requested ---
+        # It populates the .vector_return attribute for each actor
+        _, _ = eval_pop.eval_pop(self.population, self.env, [1, 1, 1])
 
-        emitted = 0
+        print("\n--- Starting Stage 2: Step 1 ---")
+        
+        # --- New code for Step 1 starts here ---
+        parent_a, parent_b = self._find_gap_and_select_parents(self.population)
 
-        if include_endpoints:
-            yield 0.0
+        if parent_a and parent_b:
+            print(f"Largest gap found: {parent_a.vector_return} <--> {parent_b.vector_return}")
+            print(f"Selected Parent A (ID: {parent_a.pop_id})")
+            print(f"Selected Parent B (ID: {parent_b.pop_id})")
+        else:
+            print("Could not select parents.")
 
-        k = 1  # denominator = 2**k
-        # Keep emitting until we have 'n' interior points
-        while emitted < n:
-            denom = 2 ** k
-            # odd numerators only: 1,3,5,...,denom-1
-            for num in range(1, denom, 2):
-                alpha = num / denom
-                # Guard against floating weirdness; round for nicer printing
-                yield float(round(alpha, 10))
-                emitted += 1
-                if emitted >= n:
-                    break
-            k += 1
-
-        if include_endpoints:
-            yield 1.0
+        print("--- Step 1 Complete ---\n")

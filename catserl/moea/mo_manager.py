@@ -1,134 +1,117 @@
-# =======================================================================
-#  catserl/moea/moea.py          →  catserl/mopderl/mo_manager.py
-#
-#  MOManager  —  Multi-Objective PDERL evolution stage (MOPDERL)
-#  ---------------------------------------------------------------------
-#  • Receives one merged population of GeneticActor objects.
-#  • Runs the MOPDERL loop for a fixed number of generations:
-#        evaluate → NSGA-II select → MO-distilled crossover → proximal mutation
-# =======================================================================
+# catserl/moea/mo_manager.py
 
 from __future__ import annotations
-from typing import List, Dict
 
-import random
+from pathlib import Path
+from typing import Dict, Iterable, List, Tuple, Any, Generator, Optional
+
+import numpy as np
 import torch
-import pygmo
 
-from catserl.shared.envs.envs import FourRoomWrapper
-from catserl.island.genetic_actor import GeneticActor
-from catserl.shared.evo_utils import selection, crossover, proximal_mutation, eval_pop
+from catserl.orchestrator.checkpoint import Checkpoint
 
 
-def dominates(a, b):
-    """
-    Returns True if vector a Pareto-dominates vector b (assumes maximization).
-    Uses pygmo's dominance logic.
-    """
-    return pygmo.pareto_dominance([-x for x in a], [-x for x in b])
+__all__ = ["MOManager"]
+
 
 class MOManager:
-    """Stage-2 multi-objective evolution over a merged population."""
+    """
+    Minimal MO stage manager (Stage 2).
 
-    # ------------------------------------------------------------------ #
-    def __init__(
-        self,
-        population: List[GeneticActor],
-        cfg: Dict,
-        device: torch.device | str = "cpu",
-    ):
-        self.pop: List[GeneticActor] = population
-        self.cfg = cfg
+    Current behavior (per your request):
+      • __init__: load a *merged* checkpoint (population, critics, island weights, meta)
+      • evolve: print a dyadic schedule of scalarisations (no evolution yet)
+
+    Notes
+    -----
+    - Expect the checkpoint to have been created via Checkpoint.save_merged(...)
+    - This is intentionally skeletal; you can flesh out evolve(...) next.
+    """
+    def __init__(self, ckpt_path: str | Path, device: torch.device | str = "cpu") -> None:
         self.device = torch.device(device)
+        self.ckpt_path = Path(ckpt_path).resolve()
+        print(f"[MOManager] Loading merged checkpoint from: {self.ckpt_path}")
 
-        # Novelty OFF environment
-        self.env = FourRoomWrapper(seed=cfg["seed"] + 999, beta=0.0)
+        ckpt = Checkpoint(self.ckpt_path)
+        pop, critics_dict, weights_by_island, meta = ckpt.load_merged(
+            device=self.device,
+            path=self.ckpt_path,
+        )
 
-        self.max_ep_len = cfg["env"]["max_ep_len"]
-        self.episodes_per_actor = cfg["mopderl"]["episodes_per_actor"]
+        self.population = pop
+        self.critics = critics_dict
+        self.weights_by_island = weights_by_island
+        self.meta = meta
 
-        self.g = 0  # generation counter
+        print(f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics.")
 
-    # ------------------------------------------------------------------ #
-    def evolve(self, generations: int, critics_dict: Dict[int, torch.nn.Module]) -> None:
+    # --------------------------------------------------------------------- #
+    # Public API
+    # --------------------------------------------------------------------- #
+
+    def evolve(self, n_points: int = 8, include_endpoints: bool = False) -> None:
         """
-        Run the MOPDERL evolution loop.
+        For now: just print a dyadic schedule of target scalarisations.
 
         Parameters
         ----------
-        generations   : int
-            Number of MO generations to perform.
-        critics_dict  : Dict[int, torch.nn.Module]
-            Mapping pop_id → critic frozen at end of Stage-1.
-            Each GeneticActor stores its pop_id and must find its critic here.
+        n_points : int
+            Number of dyadic midpoints to produce (not counting endpoints by default).
+        include_endpoints : bool
+            If True, include 0.0 and 1.0 at the beginning/end of the printed schedule.
         """
-        for _ in range(generations):
-            self._one_generation(critics_dict)
-            self.g += 1
+        schedule = list(self._dyadic_schedule(n_points, include_endpoints=include_endpoints))
+        print(f"[MOManager] Dyadic schedule (n={n_points}, include_endpoints={include_endpoints}):")
+        print(schedule)
 
-    # ------------------------------------------------------------------ #
-    #  Private helpers
-    # ------------------------------------------------------------------ #
-    def _one_generation(self, critics: Dict[int, torch.nn.Module]) -> None:
-        """One MOPDERL generation (eval → select → crossover → mutate)."""
+    # --------------------------------------------------------------------- #
+    # Helpers
+    # --------------------------------------------------------------------- #
 
-        # 1. Evaluate population on true objectives
-        eval_pop.eval_pop(
-            self.pop,
-            env=self.env,
-            weight_vector=[1, 1, 1],
-            episodes_per_actor=self.episodes_per_actor,
-            max_ep_len=self.max_ep_len,
-        )
+    @staticmethod
+    def _dyadic_schedule(n: int, *, include_endpoints: bool = False) -> Generator[float, None, None]:
+        """
+        Generate the classic dyadic mid-point schedule:
+            0.5, 0.25, 0.75, 0.125, 0.375, 0.625, 0.875, ...
 
-        # 2. NSGA-II elite selection  (μ = N/2)
-        mu = len(self.pop) // 2
-        elite = selection.nondominated_select(self.pop, mu)
+        By default, endpoints 0.0 and 1.0 are omitted (you already have experts there).
 
-        # Sort elites by NSGA-II rank and crowding distance using maximisation (negate objectives)
-        negated_points = [[-v for v in x.vector_return] for x in elite]
-        sorted_indices = pygmo.sort_population_mo(negated_points)
-        elite_to_rank = {elite[idx]: rank for rank, idx in enumerate(sorted_indices)}
+        Parameters
+        ----------
+        n : int
+            How many dyadic values to yield.
+        include_endpoints : bool
+            Whether to include 0.0 and 1.0 once at the ends.
 
-        # 3. Produce μ children via MO-distilled crossover
-        children: List[GeneticActor] = []
-        while len(children) < mu:
-            pa, pb = random.sample(elite, 2)
+        Yields
+        ------
+        float
+            Next dyadic scalarisation in (0,1) (or [0,1] if include_endpoints=True).
+        """
+        if n <= 0:
+            if include_endpoints:
+                yield 0.0
+                yield 1.0
+            return
 
-            # Decide better vs worse based on sort_population_mo rank
-            rank_pa = elite_to_rank[pa]
-            rank_pb = elite_to_rank[pb]
-            if rank_pa < rank_pb:
-                better, worse = pa, pb
-            elif rank_pb < rank_pa:
-                better, worse = pb, pa
-            else:
-                # If ranks are equal, break ties arbitrarily (keep order)
-                better, worse = pa, pb
+        emitted = 0
 
-            worse_critic = critics[worse.pop_id]          # fetch critic by id
+        if include_endpoints:
+            yield 0.0
 
-            child = crossover.mo_distilled_crossover(
-                better_parent=better,
-                worse_parent=worse,
-                critic=worse_critic,
-                cfg=self.cfg["pderl"],
-                device=self.device,
-            )
-            # Inherit pop_id = critic id of worse parent (follows paper)
-            child.pop_id = worse.pop_id
-            children.append(child)
+        k = 1  # denominator = 2**k
+        # Keep emitting until we have 'n' interior points
+        while emitted < n:
+            denom = 2 ** k
+            # odd numerators only: 1,3,5,...,denom-1
+            for num in range(1, denom, 2):
+                alpha = num / denom
+                # Guard against floating weirdness; round for nicer printing
+                yield float(round(alpha, 10))
+                emitted += 1
+                if emitted >= n:
+                    break
+            k += 1
 
-        # 4. Proximal mutation (use any elite critic for Jacobian)
-        proximal_mutation.proximal_mutate(
-            elite + children,
-            critics[elite[0].pop_id],
-            # sigma=self.cfg["pderl"]["sigma"],
-        )
-
-        # 5. Update population  (size unchanged: μ elites + μ children)
-        self.pop = elite + children
-
-        # Light progress print
-        if (self.g + 1) % 10 == 0 or self.g == 0:
-            print(f"[MOManager] Gen {self.g:04d} completed — pop {len(self.pop)}")
+        if include_endpoints:
+            yield 1.0

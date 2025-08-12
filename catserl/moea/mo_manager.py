@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple, Optional, List
+import copy
 
+from scipy.spatial.distance import pdist, squareform
 import torch
 import numpy as np
+import random
 
 from catserl.orchestrator.checkpoint import Checkpoint
 from catserl.shared.evo_utils import eval_pop
@@ -13,17 +16,7 @@ from catserl.island.genetic_actor import GeneticActor
 from catserl.shared.data.buffers import MiniBuffer
 
 
-__all__ = ["MOManager", "NormalizationStats"]
-
-
-@dataclass
-class NormalizationStats:
-    """Holds min/max statistics for normalization."""
-    reward_min: np.ndarray
-    reward_max: np.ndarray
-    value_min: np.ndarray
-    value_max: np.ndarray
-
+__all__ = ["MOManager"]
 
 class MOManager:
     """
@@ -56,39 +49,83 @@ class MOManager:
         print(f"[MOManager] Detected {self.num_objectives} objectives.")
 
     def _find_gap_and_select_parents(
-        self, population: List[GeneticActor]
-    ) -> Tuple[Optional[GeneticActor], Optional[GeneticActor]]:
+        self, population: List['GeneticActor']
+    ) -> Tuple[Optional['GeneticActor'], Optional['GeneticActor']]:
         """
-        Finds the largest gap in the objective space and returns the two
-        actors that define that gap.
+        Finds the largest gap in the multi-objective space and returns the two
+        actors that define that gap using the "Largest Nearest-Neighbor Distance" method.
         """
-        evaluated_actors = [p for p in population if p.vector_return is not None]
+        # Filter for actors that have an assigned performance vector.
+        actors = [p for p in population if p.vector_return is not None]
 
-        if len(evaluated_actors) < 2:
+        if len(actors) < 2:
             print("[MOManager] Not enough evaluated actors to find a gap.")
             return None, None
 
-        actor_returns = [(p, p.vector_return) for p in evaluated_actors]
-        actor_returns.sort(key=lambda x: x[1][0])
+        # Create a NumPy array of the return vectors for efficient calculation.
+        returns_matrix = np.array([p.vector_return for p in actors])
 
-        max_dist = -1.0
-        parent_idx = -1
-        for i in range(len(actor_returns) - 1):
-            vec_a = actor_returns[i][1]
-            vec_b = actor_returns[i+1][1]
-            dist = np.linalg.norm(vec_a - vec_b)
-            
-            if dist > max_dist:
-                max_dist = dist
-                parent_idx = i
-        
-        if parent_idx == -1:
-            return None, None
+        # 1. Calculate the N x N matrix of Euclidean distances between all pairs of points.
+        dist_matrix = squareform(pdist(returns_matrix, 'euclidean'))
 
-        parent_a = actor_returns[parent_idx][0]
-        parent_b = actor_returns[parent_idx + 1][0]
+        # 2. For each point, find its nearest neighbor. To do this, we first set the
+        # diagonal to infinity so that a point is not considered its own neighbor.
+        np.fill_diagonal(dist_matrix, np.inf)
         
+        # Find the minimum distance in each row (the distance to the nearest neighbor).
+        nearest_neighbor_dists = np.min(dist_matrix, axis=1)
+
+        # 3. Identify which point has the largest nearest-neighbor distance.
+        # This point is one of the parents defining the largest local gap.
+        parent_a_idx = np.argmax(nearest_neighbor_dists)
+
+        # 4. The other parent is the nearest neighbor to the first parent.
+        parent_b_idx = np.argmin(dist_matrix[parent_a_idx])
+
+        # Retrieve the actual actor objects.
+        parent_a = actors[parent_a_idx]
+        parent_b = actors[parent_b_idx]
+
         return parent_a, parent_b
+    
+    def _create_offspring(self, parent_a: GeneticActor, parent_b: GeneticActor):
+        # Create the mixed replay buffer for the child's "experience".
+        child_buffer = MiniBuffer(obs_shape=self.env.observation_space.shape, max_steps=parent_a.buffer.max_steps)
+        # Determine how many samples to take from each parent.
+        num_samples_per_parent = child_buffer.max_steps // 2
+        # Sample from Parent A's buffer.
+        s_a, a_a, r_a, s2_a, d_a = parent_a.buffer.sample(
+            min(num_samples_per_parent, len(parent_a.buffer)),
+            device=self.device
+        )
+        for i in range(len(s_a)):
+            child_buffer.add(
+                s_a[i].cpu().numpy(),
+                a_a[i].cpu().numpy(),
+                r_a[i].cpu().numpy(),
+                s2_a[i].cpu().numpy(),
+                d_a[i].cpu().numpy()
+            )
+        # Sample from Parent B's buffer.
+        s_b, a_b, r_b, s2_b, d_b = parent_b.buffer.sample(
+            min(num_samples_per_parent, len(parent_b.buffer)),
+            device=self.device
+        )
+        for i in range(len(s_b)):
+            child_buffer.add(
+                s_b[i].cpu().numpy(),
+                a_b[i].cpu().numpy(),
+                r_b[i].cpu().numpy(),
+                s2_b[i].cpu().numpy(),
+                d_b[i].cpu().numpy()
+            )
+
+        # Randomly select a parent to act as the template for the network.
+        template_parent = random.choice([parent_a, parent_b])
+        child = template_parent.clone()
+        child.buffer = child_buffer
+
+        return child
     
     def evolve(self):
         """
@@ -108,3 +145,7 @@ class MOManager:
         print(f"Selected Parent A (ID: {parent_a.pop_id})")
         print(f"Selected Parent B (ID: {parent_b.pop_id})")
         print("--- Step 1 Complete ---\n")
+
+        print("--- Sart step 2 ---")
+        child = self._create_offspring(parent_a, parent_b)
+        print("Created child: ", child)

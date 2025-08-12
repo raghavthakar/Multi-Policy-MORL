@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 42))
     device = torch.device(cfg.get("device", "cpu"))
 
-    env = mo_gym.make("mo-mountaincar-v0")
+    env = mo_gym.make("mo-mountaincar-timemove-v0")
 
     # Seeding
     random.seed(seed)
@@ -76,22 +76,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
     if args.resume_stage2 is not None:
-        try:
-            mo_mgr = MOManager(env, args.resume_stage2, device=device)
-            for _ in range(5):
-                mo_mgr.evolve()
-            print("MOManager Stage 2 run complete (resumed from checkpoint).")
-            return 0
-        except Exception as e:
-            print(f"Failed to start Stage 2 from checkpoint {args.resume_stage2}: {e}", file=sys.stderr)
-            return 2
-
+        mo_mgr = MOManager(env, 2, args.resume_stage2, device=device)
+        for _ in range(5):
+            mo_mgr.evolve()
+        print("MOManager Stage 2 run complete (resumed from checkpoint).")
+        return 0
+    
     # ---------- Stage 1 (islands) ----------
     # Two islands with different objective weights.
-    mgr0 = IslandManager(env, 1, np.array([1, 0, 0]), cfg, seed=seed + 1, device=device)
-    mgr1 = IslandManager(env, 2, np.array([0, 1, 0]), cfg, seed=seed + 2, device=device)
+    mgr0 = IslandManager(env, 1, np.array([1, 0]), cfg, seed=seed + 1, device=device)
+    mgr1 = IslandManager(env, 2, np.array([0, 1]), cfg, seed=seed + 2, device=device)
 
-    generations = 75
+    generations = 3
     for gen in range(generations):
         mgr0.train_generation()
         mgr1.train_generation()

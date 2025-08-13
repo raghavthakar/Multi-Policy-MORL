@@ -175,5 +175,55 @@ class MOManager:
         child = self._create_offspring(parent_a, parent_b)
         print("Created child: ", child)
 
-        # --- Step 4: Create a hybrid critic ---
-        
+        # --- Step 4: Evaluate critics on child's states and normalise ---
+        print("--- Start step 4 ---")
+        # Sample a batch of transitions from the child's buffer
+        if len(child.buffer) == 0:
+            print("[MOManager] Child buffer empty; skipping step 4.")
+            return
+
+        batch_size = min(1024, len(child.buffer))
+        s, _, _, _, _ = child.buffer.sample(batch_size, device=self.device)
+
+        # Compute critic values V(s) per critic and gather stats
+        critic_ids = sorted(self.critics.keys())
+        if len(critic_ids) == 0:
+            print("[MOManager] No critics available; skipping step 4.")
+            return
+
+        per_critic_vals = []  # list of tensors [B]
+        with torch.no_grad():
+            for cid in critic_ids:
+                critic = self.critics[cid]
+                critic.eval()
+                # Prefer a generic value() if available; fall back to Q->max_a
+                if hasattr(critic, "value") and callable(getattr(critic, "value")):
+                    v = critic.value(s)
+                    if v.dim() > 1:
+                        v = v.squeeze(-1)  # [B]
+                else:
+                    q = critic(s)
+                    v = q.max(dim=1).values if q.dim() > 1 else q
+                per_critic_vals.append(v)
+
+        values = torch.stack(per_critic_vals, dim=0)  # [C, B]
+
+        # Per-critic min and max across the batch
+        mins = values.min(dim=1).values  # [C]
+        maxs = values.max(dim=1).values  # [C]
+
+        # Remember min and max values per critic
+        self._critic_value_mins = {cid: float(mins[i].item()) for i, cid in enumerate(critic_ids)}
+        self._critic_value_maxs = {cid: float(maxs[i].item()) for i, cid in enumerate(critic_ids)}
+
+        # Normalise the critic values using per-critic min/max
+        denom = (maxs - mins).clamp(min=1e-8)  # [C]
+        norm_values = (values - mins.unsqueeze(1)) / denom.unsqueeze(1)  # [C, B]
+
+        # Optional: store normalized values for downstream use
+        self._critic_batch_values_norm = {cid: norm_values[i].detach().cpu() for i, cid in enumerate(critic_ids)}
+
+        print("Per-critic value mins:", self._critic_value_mins)
+        print("Per-critic value maxs:", self._critic_value_maxs)
+        print("Normalised values shape:", tuple(norm_values.shape))
+        print("--- Step 4 complete ---")

@@ -146,6 +146,34 @@ class MOManager:
         print(f"Selected Parent B (ID: {parent_b.pop_id})")
         print("--- Step 1 Complete ---\n")
 
-        print("--- Sart step 2 ---")
+        # --- Step 2: Set target scalarisation ---
+        evaluated = [p for p in self.population if p.vector_return is not None]
+        if len(evaluated) >= 2:
+            returns = np.vstack([p.vector_return for p in evaluated])
+            mins = returns.min(axis=0)
+            maxs = returns.max(axis=0)
+
+            # Avoid division-by-zero for objectives with no spread
+            denom = maxs - mins
+            denom = np.where(denom == 0.0, 1.0, denom)
+
+            # Normalise the selected parents (non-mutating)
+            norm_a = (parent_a.vector_return - mins) / denom
+            norm_b = (parent_b.vector_return - mins) / denom
+
+            # Mid-point (bisection) to be used as target scalarisation
+            target_scalarisation = 0.5 * (norm_a + norm_b)
+
+            print(f"Normalised Parent A: {norm_a}")
+            print(f"Normalised Parent B: {norm_b}")
+            print(f"Target scalarisation (midpoint): {target_scalarisation}")
+        else:
+            print("[MOManager] Not enough evaluated actors to normalise returns for bisection.")
+        
+        # --- Step 3: Create a child policy starting point ---
+        print("--- Sart step 3 ---")
         child = self._create_offspring(parent_a, parent_b)
         print("Created child: ", child)
+
+        # --- Step 4: Create a hybrid critic ---
+        

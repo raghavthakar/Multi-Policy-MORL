@@ -135,6 +135,61 @@ class MiniBuffer:
         self.ptr = (self.ptr + 1) % self.max_steps
         if self.ptr == 0:
             self.full = True
+            
+    def add_batch(self, states: np.ndarray, actions: np.ndarray, reward_vecs: np.ndarray, next_states: np.ndarray, dones: np.ndarray):
+        """
+        Adds a batch of transitions to the buffer, handling wraparound.
+        """
+        batch_size = len(states)
+        if batch_size == 0:
+            return
+
+        # --- Lazy Initialization Block ---
+        if self.states is None:
+            obs_shape = states.shape[1:]
+            num_objectives = reward_vecs.shape[1]
+
+            self.states = np.zeros((self.max_steps, *obs_shape), dtype=np.float32)
+            self.actions = np.zeros(self.max_steps, dtype=np.int64)
+            self.rewards = np.zeros((self.max_steps, num_objectives), dtype=np.float32)
+            self.next_states = np.zeros((self.max_steps, *obs_shape), dtype=np.float32)
+            self.dones = np.zeros(self.max_steps, dtype=bool)
+        # --- End of Block ---
+
+        # Check if the batch will wrap around the buffer's capacity
+        if self.ptr + batch_size >= self.max_steps:
+            # The buffer will be full after this operation
+            self.full = True
+            
+            # Calculate how many transitions fit before the end of the array
+            num_to_end = self.max_steps - self.ptr
+            
+            # First part of the batch: fill until the end
+            self.states[self.ptr:] = states[:num_to_end]
+            self.actions[self.ptr:] = actions[:num_to_end]
+            self.rewards[self.ptr:] = reward_vecs[:num_to_end]
+            self.next_states[self.ptr:] = next_states[:num_to_end]
+            self.dones[self.ptr:] = dones[:num_to_end]
+            
+            # Second part of the batch: wrap around and fill from the beginning
+            remaining = batch_size - num_to_end
+            if remaining > 0:
+                self.states[:remaining] = states[num_to_end:]
+                self.actions[:remaining] = actions[num_to_end:]
+                self.rewards[:remaining] = reward_vecs[num_to_end:]
+                self.next_states[:remaining] = next_states[num_to_end:]
+                self.dones[:remaining] = dones[num_to_end:]
+        else:
+            # The batch fits without wrapping around
+            indices = np.arange(self.ptr, self.ptr + batch_size)
+            self.states[indices] = states
+            self.actions[indices] = actions
+            self.rewards[indices] = reward_vecs
+            self.next_states[indices] = next_states
+            self.dones[indices] = dones
+
+        # Update the pointer
+        self.ptr = (self.ptr + batch_size) % self.max_steps
 
     def sample(self, batch_size: int, device: torch.device):
         """Samples a batch of transitions and returns them as torch tensors."""

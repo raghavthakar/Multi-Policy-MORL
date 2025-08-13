@@ -163,6 +163,8 @@ class MOManager:
 
             # Mid-point (bisection) to be used as target scalarisation
             target_scalarisation = 0.5 * (norm_a + norm_b)
+            # Make unit vector
+            target_scalarisation = target_scalarisation/np.linalg.norm(target_scalarisation)
 
             print(f"Normalised Parent A: {norm_a}")
             print(f"Normalised Parent B: {norm_b}")

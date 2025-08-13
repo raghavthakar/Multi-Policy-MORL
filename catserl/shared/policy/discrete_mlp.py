@@ -64,3 +64,8 @@ class DuelingQNet(nn.Module):
         a = self.a(h)                # [B,|A|]
         q = v + a - a.mean(dim=1, keepdim=True)
         return q                    # [B,|A|]
+
+    def value(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.shared(x)
+        v = self.v(h).squeeze(-1)
+        return v

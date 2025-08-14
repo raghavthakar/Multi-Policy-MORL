@@ -16,6 +16,7 @@ from catserl.orchestrator.checkpoint import Checkpoint
 from catserl.shared.evo_utils import eval_pop
 from catserl.island.genetic_actor import GeneticActor
 from catserl.shared.data.buffers import MiniBuffer
+from catserl.moea.basic_visualizer import BasicVisualizer
 
 
 __all__ = ["MOManager"]
@@ -45,6 +46,9 @@ class MOManager:
 
         print(f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics.")
         print(f"[MOManager] Detected {self.num_objectives} objectives.")
+
+        self.generation = 0
+        self.visualizer = BasicVisualizer(num_objectives=self.num_objectives)
 
     def _find_gap_and_select_parents(
         self, population: List['GeneticActor']
@@ -103,7 +107,7 @@ class MOManager:
         """
         # --- 1. Setup ---
         optimizer = torch.optim.Adam(child.net.parameters(), lr=config.get("lr", 3e-4))
-        num_epochs = config.get("epochs", 10)
+        num_epochs = config.get("epochs", 250)
         batch_size = config.get("batch_size", 256)
         ppo_clip_epsilon = config.get("ppo_clip_epsilon", 0.2)
         
@@ -143,25 +147,35 @@ class MOManager:
         dataset = TensorDataset(all_s, all_a, old_log_probs, hybrid_advantages)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # --- 3. PPO-style Update Loop ---
+        
+        # --- 3. AWR Update Loop ---
+        # NEW: Add the AWR beta hyperparameter
+        beta = config.get("awr_beta", 5.0) # A good starting point to tune
+
         child.net.train()
-        for epoch in range(num_epochs):
+        for epoch in range(num_epochs): # With AWR, you CAN train for multiple epochs
             total_loss = 0
-            for s_batch, a_batch, old_log_prob_batch, adv_batch in dataloader:
+            for s_batch, a_batch, _, adv_batch in dataloader: # No longer need old_log_prob
+                
+                # Detach advantages to prevent gradients from flowing into the critics
+                adv_batch = adv_batch.detach()
+
                 # Get log-probs from the policy *as it is being updated*
                 new_log_prob_batch = child.net.get_log_prob(s_batch, a_batch)
                 
-                # Calculate the PPO probability ratio
-                ratio = torch.exp(new_log_prob_batch - old_log_prob_batch)
+                # --- START: AWR Loss Calculation (Replaces PPO Loss) ---
                 
-                # Calculate the clipped and unclipped surrogate objectives
-                surr1 = ratio * adv_batch
-                surr2 = torch.clamp(ratio, 1.0 - ppo_clip_epsilon, 1.0 + ppo_clip_epsilon) * adv_batch
+                # Calculate the exponential advantage weights
+                awr_weights = torch.exp(adv_batch / beta)
                 
-                # The PPO loss is the minimum of the two, negated because we want to ascend
-                policy_loss = -torch.min(surr1, surr2).mean()
+                # To prevent explosive values, you can clip the weights
+                awr_weights = torch.clamp(awr_weights, max=100.0)
+
+                # Calculate the final AWR loss
+                policy_loss = - (awr_weights * new_log_prob_batch).mean()
                 
-                # Gradient Update
+                # --- END: AWR Loss Calculation ---
+
                 optimizer.zero_grad()
                 policy_loss.backward()
                 torch.nn.utils.clip_grad_norm_(child.net.parameters(), max_norm=1.0)
@@ -169,7 +183,7 @@ class MOManager:
                 
                 total_loss += policy_loss.item()
             
-            print(f"[Epoch {epoch + 1}/{num_epochs}] Average Policy Loss: {total_loss / len(dataloader):.4f}")
+            print(f"[Epoch {epoch + 1}/{num_epochs}] Average AWR Policy Loss: {total_loss / len(dataloader):.4f}")
         child.net.eval()
 
     def evolve(self, finetune_config: Optional[dict] = None):
@@ -177,11 +191,19 @@ class MOManager:
         Evolve the population for one generation.
         """
         if finetune_config is None:
-            finetune_config = {"epochs": 10, "lr": 3e-4, "batch_size": 256, "ppo_clip_epsilon": 0.2}
+            finetune_config = {"epochs": 50, "lr": 3e-4, "batch_size": 256, "ppo_clip_epsilon": 0.2}
 
         # --- Step 1: Parent Selection ---
         print("\n--- Starting Stage 2: Step 1 (Parent Selection) ---")
-        _, _ = eval_pop.eval_pop(self.population, self.env, [1 for i in range(self.num_objectives)])
+        _, _ = eval_pop.eval_pop(self.population, self.env, [1 for i in range(self.num_objectives)], episodes_per_actor=50)
+
+        # --- ADD YOUR ONE-LINE VISUALIZATION CALL HERE ---
+        self.generation += 1
+        self.visualizer.update(population=self.population, generation=self.generation)
+        # --------------------------------------------------
+        
+        for ind in self.population:
+            print(ind.vector_return)
         parent_a, parent_b = self._find_gap_and_select_parents(self.population)
 
         if not (parent_a and parent_b):
@@ -221,5 +243,5 @@ class MOManager:
         print("--- Starting Stage 2: Step 4 (Fine-tuning) ---")
         self._finetune_child(child, target_scalarisation, finetune_config)
         print("--- Step 4 Complete ---")
-        
+
         self.population.append(child)

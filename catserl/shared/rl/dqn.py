@@ -65,9 +65,7 @@ class RLWorker:
             return np.random.randint(self.n_actions)
         t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
         q = self.net(t)  # [1, A]
-        probabilities = F.softmax(q, dim=1)
-        action = torch.multinomial(probabilities, num_samples=1).item()
-        return action
+        return int(q.argmax(dim=1).item())
 
     def remember(self, *tr):
         self.buffer.push(*tr)

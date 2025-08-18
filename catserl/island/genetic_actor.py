@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Tuple, Optional
 import torch, numpy as np
 import copy
+import torch.nn.functional as F
 
 from catserl.shared.policy.discrete_mlp import DiscreteActor
 from catserl.shared.data.buffers import MiniBuffer
@@ -53,7 +54,10 @@ class GeneticActor:
         Deterministic action = argmax(logits).
         """
         t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-        return int(self.net(t).argmax(dim=1).item())
+        logits = self.net(t)
+        probabilities = F.softmax(logits, dim=1)
+        action = torch.multinomial(probabilities, num_samples=1).item()
+        return action
 
     # ------------------------------------------------------------------ #
     # remember  (used by rollout to populate MiniBuffer)

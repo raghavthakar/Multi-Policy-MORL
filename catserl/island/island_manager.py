@@ -15,10 +15,8 @@ from catserl.island import genetic_actor
 class IslandManager:
     """
     Warm-up “island” that owns
-      • ONE private env instance
-      • ONE RLWorker trained on a scalar weight vector
-      • A GA sub-population and PDERL operators
-
+      - ONE private env instance
+      - ONE RLWorker trained on a scalar weight vector
     Public API kept minimal so the global orchestrator can treat all
     objectives uniformly.
     """
@@ -66,6 +64,7 @@ class IslandManager:
         self.pop = [genetic_actor.GeneticActor(self.island_id, 
                                                self.env.observation_space.shape, 
                                                self.env.action_space.n, 
+                                               buffer_size=cfg["mini_buffer_size"],
                                                device=device) for _ in range(cfg["pderl"]["pop_size"])]
         
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
@@ -114,8 +113,7 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
         """
-        Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online, and 
-        perform one generation for the EA by evaluating each actor for ea_episodes_per_actor episodes.
+        Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online.
 
         Returns
         -------
@@ -143,56 +141,6 @@ class IslandManager:
         # Update the RL actor proportionally to steps collected
         for _ in range(steps_this_gen):
             self.worker.update()
-        '''
-        stats, eval_frames = eval_pop.eval_pop(
-            self.pop,
-            env=self.env,
-            weight_vector=self.w,
-            episodes_per_actor=ea_episodes_per_actor,
-            max_ep_len=self.max_ep_len,
-        )
-        self.frames_collected += eval_frames
-
-        # ---------- logging ------------------------------------------ #
-        for ind in self.pop:
-            print(f"Weight {self.w} vector return: {ind.vector_return}, ")
-
-        # ---------- evolutionary step -------------------------------- #
-        mu = max(1, len(self.pop) // 3)
-        elite = selection.elitist_select(self.pop, mu)
-
-        # decide migration and offspring count
-        migrate = (self.gen_counter % self.migrate_every == 0)
-        extra_offsprings = 0 if migrate else 1
-        target_offsprings = max(0, mu - 1) + extra_offsprings
-
-        # create crossover offspring
-        offsprings = []
-        while len(offsprings) < target_offsprings and len(elite) > 1:
-            pa, pb = self._pick_parents(elite)
-            child = crossover.distilled_crossover(
-                pa, pb, self.worker.critic(), self.cfg["pderl"], device=self.worker.device
-            )
-            offsprings.append(child)
-        # fallback clones if not enough offspring
-        while len(offsprings) < target_offsprings:
-            offsprings.append(elite[0].clone())
-
-        # mutate elites
-        mutated_elites = [actor.clone() for actor in elite]
-        proximal_mutation.proximal_mutate(
-            mutated_elites, self.worker.critic(), sigma=self.cfg["pderl"].get("sigma", 0.02)
-        )
-
-        # assemble new population
-        self.pop = elite + offsprings + mutated_elites
-
-        # append RL actor if migrating
-        if migrate:
-            rl_actor = self._make_rl_actor()
-            self.pop.append(rl_actor)
-        '''
-
         self.gen_counter += 1
 
     # ------------------------------------------------------------------ #

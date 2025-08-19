@@ -86,19 +86,19 @@ class MOManager:
         child.pop_id = uuid.uuid4().hex[:8] # Assign a new, unique ID
 
         # Create and populate the mixed replay buffer efficiently
-        child_buffer = MiniBuffer(obs_shape=self.env.observation_space.shape, max_steps=parent_a.buffer.max_steps)
+        child_buffer = MiniBuffer(obs_shape=self.env.observation_space.shape, max_steps=parent_a.impl.buffer.max_steps)
         num_samples_per_parent = child_buffer.max_steps // 2
 
         # Assuming MiniBuffer has an `add_batch` method that takes numpy arrays
-        if len(parent_a.buffer) > 0:
-            s, a, r, s2, d = parent_a.buffer.sample(min(num_samples_per_parent, len(parent_a.buffer)), device="cpu")
+        if len(parent_a.impl.buffer) > 0:
+            s, a, r, s2, d = parent_a.impl.buffer.sample(min(num_samples_per_parent, len(parent_a.impl.buffer)), device="cpu")
             child_buffer.add_batch(s, a, r, s2, d)
         
-        if len(parent_b.buffer) > 0:
-            s, a, r, s2, d = parent_b.buffer.sample(min(num_samples_per_parent, len(parent_b.buffer)), device="cpu")
+        if len(parent_b.impl.buffer) > 0:
+            s, a, r, s2, d = parent_b.impl.buffer.sample(min(num_samples_per_parent, len(parent_b.impl.buffer)), device="cpu")
             child_buffer.add_batch(s, a, r, s2, d)
             
-        child.buffer = child_buffer
+        child.impl.buffer = child_buffer
         return child
 
     def _finetune_child(self, child: DQNActor, target_scalarisation: np.ndarray, config: dict):
@@ -106,12 +106,12 @@ class MOManager:
         Fine-tunes the child policy using a PPO-style update on the hybrid advantage signal.
         """
         # --- 1. Setup ---
-        optimizer = torch.optim.Adam(child.net.parameters(), lr=config.get("lr", 3e-4))
+        optimizer = torch.optim.Adam(child.impl.net.parameters(), lr=config.get("lr", 3e-4))
         num_epochs = config.get("epochs", 250)
         batch_size = config.get("batch_size", 256)
         ppo_clip_epsilon = config.get("ppo_clip_epsilon", 0.2)
         
-        if len(child.buffer) < batch_size:
+        if len(child.impl.buffer) < batch_size:
             print("[MOManager] Child buffer too small for a full batch. Skipping fine-tuning.")
             return
 
@@ -121,7 +121,7 @@ class MOManager:
         # --- 2. Pre-compute Advantages for the entire static buffer ---
         # This is more stable than re-calculating normalization stats for every batch.
         print("Pre-computing advantages for the entire buffer...")
-        all_s, all_a, _, _, _ = child.buffer.sample(len(child.buffer), device=self.device)
+        all_s, all_a, _, _, _ = child.impl.buffer.sample(len(child.impl.buffer), device=self.device)
 
         with torch.no_grad():
             per_critic_advs = []
@@ -142,7 +142,7 @@ class MOManager:
             
             # Pre-compute final hybrid advantage and old log probabilities
             hybrid_advantages = torch.sum(norm_advs * weights, dim=0)
-            old_log_probs = child.net.get_log_prob(all_s, all_a)
+            old_log_probs = child.impl.net.get_log_prob(all_s, all_a)
 
         dataset = TensorDataset(all_s, all_a, old_log_probs, hybrid_advantages)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -152,7 +152,7 @@ class MOManager:
         # NEW: Add the AWR beta hyperparameter
         beta = config.get("awr_beta", 5.0) # A good starting point to tune
 
-        child.net.train()
+        child.impl.net.train()
         for epoch in range(num_epochs): # With AWR, you CAN train for multiple epochs
             total_loss = 0
             for s_batch, a_batch, _, adv_batch in dataloader: # No longer need old_log_prob
@@ -161,7 +161,7 @@ class MOManager:
                 adv_batch = adv_batch.detach()
 
                 # Get log-probs from the policy *as it is being updated*
-                new_log_prob_batch = child.net.get_log_prob(s_batch, a_batch)
+                new_log_prob_batch = child.impl.net.get_log_prob(s_batch, a_batch)
                 
                 # --- START: AWR Loss Calculation (Replaces PPO Loss) ---
                 
@@ -178,13 +178,13 @@ class MOManager:
 
                 optimizer.zero_grad()
                 policy_loss.backward()
-                torch.nn.utils.clip_grad_norm_(child.net.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(child.impl.net.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_loss += policy_loss.item()
             
             print(f"[Epoch {epoch + 1}/{num_epochs}] Average AWR Policy Loss: {total_loss / len(dataloader):.4f}")
-        child.net.eval()
+        child.impl.net.eval()
 
     def evolve(self, finetune_config: Optional[dict] = None):
         """
@@ -236,7 +236,7 @@ class MOManager:
         # --- Step 3: Create Child ---
         print("--- Starting Stage 2: Step 3 (Offspring Creation) ---")
         child = self._create_offspring(parent_a, parent_b)
-        print(f"Created Offspring (ID: {child.pop_id}) with buffer size {len(child.buffer)}.")
+        print(f"Created Offspring (ID: {child.pop_id}) with buffer size {len(child.impl.buffer)}.")
         print("--- Step 3 Complete ---\n")
         
         # --- Step 4: Fine-tune Child ---

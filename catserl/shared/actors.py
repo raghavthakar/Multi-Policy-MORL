@@ -1,97 +1,115 @@
-"""
-GeneticActor
-============
-
-A genome =  (policy  +  per‑actor replay buffer  +  bookkeeping fields)
-
-* Provides `.act`, `.remember`, `.clone`, and flat‑parameter helpers.
-* Stores runtime stats (`fitness`, `vector_return`) so that evaluation and
-  selection code can read/write without separate dicts.
-"""
-
 from __future__ import annotations
 from typing import Tuple, Optional
-import torch, numpy as np
 import copy
 
+import numpy as np
+import torch
 from catserl.shared.policies import DiscretePolicy
 from catserl.shared.buffers import MiniBuffer
 
 
 class DQNActor:
-    # ------------------------------------------------------------------ #
-    def __init__(self,
-                 pop_id: int | None,
-                 obs_shape: Tuple[int, ...],
-                 n_actions: int,
-                 hidden_dim: int = 128,
-                 buffer_size: int = 8_192,
-                 device: str | torch.device = "cpu"):
-        # immutable meta
-        self.pop_id = pop_id
-        self.obs_shape  = obs_shape
-        self.n_actions  = n_actions
+    """Arg‑max policy with its own buffer."""
+
+    def __init__(
+        self,
+        obs_shape: Tuple[int, ...],
+        n_actions: int,
+        hidden_dim: int = 128,
+        buffer_size: int = 8192,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        self.obs_shape = obs_shape
+        self.n_actions = n_actions
         self.hidden_dim = hidden_dim
-        self.device     = torch.device(device)
+        self.device = torch.device(device)
 
-        # policy network
         self.net = DiscretePolicy(obs_shape, n_actions, hidden_dim).to(self.device)
-
-        # tiny per‑genome replay buffer (<s,a>)
         self.buffer = MiniBuffer(obs_shape, max_steps=buffer_size)
 
-        # runtime evaluation stats (updated by eval_pop or island_step)
-        self.fitness: Optional[float]        = None     # scalar
-        self.vector_return: Optional[np.ndarray] = None # full vector
-
-    # ------------------------------------------------------------------ #
-    # Acting (deterministic policy)
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------
     @torch.no_grad()
     def act(self, state: np.ndarray) -> int:
-        """
-        Deterministic action = argmax(logits).
-        """
         t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-        return int(self.net(t).argmax(dim=1).item())
+        return int(self.net(t).argmax(1).item())
 
-    # ------------------------------------------------------------------ #
-    # remember  (used by rollout to populate MiniBuffer)
-    # ------------------------------------------------------------------ #
     def remember(self, state, action, r_vec, next_state, done):
-        """
-        rollout() calls policy.remember(s, a, r_vec, s2, done).
-        """
         self.buffer.add(state, action, r_vec, next_state, done)
 
-    # ------------------------------------------------------------------ #
-    # Flat‑parameter helpers  (for mutation & cloning)
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------
     def flat_params(self) -> torch.Tensor:
         return torch.cat([p.data.view(-1) for p in self.net.parameters()])
 
     def load_flat_params(self, flat: torch.Tensor) -> None:
-        """Load from a 1‑D tensor obtained via .flat_params()."""
         idx = 0
         for p in self.net.parameters():
             n = p.numel()
-            p.data.copy_(flat[idx: idx + n].view_as(p))
+            p.data.copy_(flat[idx : idx + n].view_as(p))
             idx += n
 
-    # ------------------------------------------------------------------ #
-    # Deep clone (new buffer, copied weights)
-    # ------------------------------------------------------------------ #
     def clone(self) -> "DQNActor":
-        """Creates a deep clone with a copied buffer and network weights."""
-        clone = DQNActor(self.pop_id,
-                             self.obs_shape,
-                             self.n_actions,
-                             self.hidden_dim,
-                             buffer_size=self.buffer.max_steps,
-                             device=self.device)
-        clone.load_flat_params(self.flat_params().clone())
-        
-        # --- Simplified buffer cloning ---
-        clone.buffer = copy.deepcopy(self.buffer)
+        twin = DQNActor(
+            self.obs_shape,
+            self.n_actions,
+            self.hidden_dim,
+            buffer_size=self.buffer.max_steps,
+            device=self.device,
+        )
+        twin.load_flat_params(self.flat_params().clone())
+        twin.buffer = copy.deepcopy(self.buffer)
+        return twin
 
-        return clone
+
+class Actor:
+    """Generic wrapper that exposes common fields for checkpointing."""
+
+    def __init__(
+        self,
+        kind: str,
+        pop_id: int | None,
+        obs_shape: Tuple[int, ...],
+        n_actions: int,
+        hidden_dim: int = 128,
+        buffer_size: int = 8192,
+        device: str | torch.device = "cpu",
+    ) -> None:
+        self.kind = kind.lower()
+        self.pop_id = pop_id
+        self.fitness: Optional[float] = None
+        self.vector_return: Optional[np.ndarray] = None
+
+        if self.kind == "dqn":
+            self.impl = DQNActor(
+                obs_shape,
+                n_actions,
+                hidden_dim=hidden_dim,
+                buffer_size=buffer_size,
+                device=device,
+            )
+        else:
+            raise ValueError(f"unknown actor type: {self.kind}")
+
+        # expose implementation details needed by checkpoint
+        self.obs_shape = self.impl.obs_shape
+        self.n_actions = self.impl.n_actions
+        self.hidden_dim = self.impl.hidden_dim
+
+    # ------------------------------------------------------------------
+    def act(self, state):
+        return self.impl.act(state)
+
+    def remember(self, *tr):
+        self.impl.remember(*tr)
+
+    def flat_params(self):
+        return self.impl.flat_params()
+
+    def load_flat_params(self, flat):
+        self.impl.load_flat_params(flat)
+
+    def clone(self):
+        twin = Actor.__new__(Actor)
+        twin.kind = self.kind
+        twin.pop_id = self.pop_id
+        twin.impl = self.impl.clone()
+        return twin

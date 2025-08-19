@@ -38,7 +38,7 @@ class IslandManager:
         scalar_weight : np.ndarray
             One-hot (or general) weight vector w_j used to scalarise reward.
         cfg : dict
-            Top-level config; expects sub-dict ``cfg["dqn"]``.
+            Top-level config;.
         seed : int
             Seed for the wrapped env so different ERLManagers get decorrelated
             stochasticity but the run is reproducible.
@@ -48,24 +48,26 @@ class IslandManager:
         self.island_id = island_id
         self.cfg = cfg
         self.env = env
+        self.rl_alg_name = 'dqn'
         # -------------------------------------------------------------- #
         # local deterministic RNG for this island
         self.rs = np.random.RandomState(seed)
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
 
-        self.worker = RLWorker('dqn',
+        self.worker = RLWorker(self.rl_alg_name,
                                self.env.observation_space.shape,
                                self.env.action_space.n,
                                self.w,
-                               cfg["dqn"],
+                               cfg["rl"],
                                device)
         
-        self.pop = [actors.DQNActor(self.island_id, 
-                                               self.env.observation_space.shape, 
-                                               self.env.action_space.n, 
-                                               buffer_size=cfg["mini_buffer_size"],
-                                               device=device) for _ in range(cfg["pderl"]["pop_size"])]
+        self.pop = [actors.Actor(self.rl_alg_name,
+                                 self.island_id,
+                                 self.env.observation_space.shape,
+                                 self.env.action_space.n,
+                                 buffer_size=cfg["mini_buffer_size"],
+                                 device=device) for _ in range(cfg["pderl"]["pop_size"])]
         
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
         self.gen_counter = 0
@@ -82,11 +84,12 @@ class IslandManager:
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
         flat, hid = self.worker.export_policy_params()
-        rl_actor = actors.DQNActor(self.island_id, 
-                                              self.env.observation_space.shape,
-                                              self.env.action_space.n,
-                                              hidden_dim=hid,
-                                              device=self.worker.device)
+        rl_actor = actors.Actor(self.rl_alg_name,
+                                self.island_id,
+                                self.env.observation_space.shape,
+                                self.env.action_space.n,
+                                hidden_dim=hid,
+                                device=self.worker.device,)
         rl_actor.load_flat_params(flat)
         return rl_actor
 
@@ -111,9 +114,9 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     # ----------  Warm-up generation loop  ------------------------------ #
     # ------------------------------------------------------------------ #
-    def train_generation(self, dqn_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
+    def train_generation(self, rl_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
         """
-        Collect `dqn_episodes` rollouts for the RL worker, let the RL worker learn online.
+        Collect `rl_episodes` rollouts for the RL worker, let the RL worker learn online.
 
         Returns
         -------
@@ -126,7 +129,7 @@ class IslandManager:
         """
         # Collect experiences for the RL actor
         steps_this_gen = 0
-        for _ in range(dqn_episodes):
+        for _ in range(rl_episodes):
             ret_vec, ep_len = rollout(
                 self.env, self.worker, store_transitions=True, max_ep_len=self.max_ep_len
             )

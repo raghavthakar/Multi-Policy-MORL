@@ -6,9 +6,9 @@ seed: 42                 # global RNG seed
 device: "cpu"           # "cpu" or "cuda"
 
 # -------------------------------------------------
-#  Dueling-DQN worker  (rl/dqn.py)
+#  RL configs
 # -------------------------------------------------
-dqn:
+rl:
   hidden_dim:        128        # width of shared + stream layers
   lr:                5e-4       # Adam LR (same for all params)
   gamma:             0.99       # discount

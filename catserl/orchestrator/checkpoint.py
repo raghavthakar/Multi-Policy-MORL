@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple, Any
 import torch
 import numpy as np
 
-from catserl.shared.actors import DQNActor
+from catserl.shared.actors import Actor
 
 class Checkpoint:
     """
@@ -34,7 +34,7 @@ class Checkpoint:
     @torch.no_grad()
     def save_merged(
         self,
-        population: List["DQNActor"],
+        population: List["Actor"],
         critics_by_island: Dict[int, torch.nn.Module],
         weights_by_island: Dict[int, np.ndarray],
         cfg: Dict[str, Any],
@@ -45,10 +45,11 @@ class Checkpoint:
             flat = actor.flat_params().detach().cpu().clone()
             actors_blob.append(
                 {
+                    "kind": str(actor.kind),
                     "pop_id": int(actor.pop_id) if actor.pop_id is not None else -1,
-                    "obs_shape": tuple(int(x) for x in actor.obs_shape),
-                    "n_actions": int(actor.n_actions),
-                    "hidden_dim": int(actor.hidden_dim),
+                    "obs_shape": tuple(int(x) for x in actor.impl.obs_shape),
+                    "n_actions": int(actor.impl.n_actions),
+                    "hidden_dim": int(actor.impl.hidden_dim),
                     "flat": flat,
                 }
             )
@@ -99,10 +100,11 @@ class Checkpoint:
         if int(payload.get("version", 0)) != self.VERSION:
             raise RuntimeError(f"Checkpoint version mismatch: found {payload.get('version')}, expected {self.VERSION}")
 
-        from catserl.shared.actors import DQNActor
+        from catserl.shared.actors import Actor
         pop = []
         for a in payload["actors"]:
-            actor = DQNActor(
+            actor = Actor(
+                kind=str(a['kind']),
                 pop_id=int(a["pop_id"]),
                 obs_shape=tuple(a["obs_shape"]),
                 n_actions=int(a["n_actions"]),

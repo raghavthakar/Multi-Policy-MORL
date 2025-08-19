@@ -5,10 +5,9 @@ import numpy as np, random, torch
 import hashlib
 import mo_gymnasium as mo_gym
 
-from catserl.shared.envs.envs import FourRoomWrapper
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
-from catserl.shared.rl.dqn import RLWorker
-from catserl.shared.envs.rollout import rollout
+from catserl.shared.rl import RLWorker
+from catserl.shared.rollout import rollout
 from catserl.island import genetic_actor
 
 
@@ -55,7 +54,8 @@ class IslandManager:
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
 
-        self.worker = RLWorker(self.env.observation_space.shape,
+        self.worker = RLWorker('dqn',
+                               self.env.observation_space.shape,
                                self.env.action_space.n,
                                self.w,
                                cfg["dqn"],

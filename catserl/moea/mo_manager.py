@@ -15,7 +15,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from catserl.orchestrator.checkpoint import Checkpoint
 from catserl.shared.evo_utils import eval_pop
 from catserl.island.genetic_actor import GeneticActor
-from catserl.shared.data.buffers import MiniBuffer
+from catserl.shared.buffers import MiniBuffer
 from catserl.moea.basic_visualizer import BasicVisualizer
 
 

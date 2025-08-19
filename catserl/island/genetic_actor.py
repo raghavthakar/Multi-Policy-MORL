@@ -14,8 +14,8 @@ from typing import Tuple, Optional
 import torch, numpy as np
 import copy
 
-from catserl.shared.policy.discrete_mlp import DiscreteActor
-from catserl.shared.data.buffers import MiniBuffer
+from catserl.shared.policies import DiscretePolicy
+from catserl.shared.buffers import MiniBuffer
 
 
 class GeneticActor:
@@ -35,7 +35,7 @@ class GeneticActor:
         self.device     = torch.device(device)
 
         # policy network
-        self.net = DiscreteActor(obs_shape, n_actions, hidden_dim).to(self.device)
+        self.net = DiscretePolicy(obs_shape, n_actions, hidden_dim).to(self.device)
 
         # tiny per‑genome replay buffer (<s,a>)
         self.buffer = MiniBuffer(obs_shape, max_steps=buffer_size)

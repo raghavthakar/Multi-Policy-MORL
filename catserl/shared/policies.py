@@ -1,9 +1,8 @@
-# policy/discrete_mlp.py
+# policy/policy.py
 
 """
 Feed-forward networks for discrete‐action domains.
 * DiscreteActor : π(s) logits  (GeneticActor genome)
-* DuelingQNet   : V(s) + A(s,a) critic  (DQN worker)
 """
 
 import numpy as np
@@ -18,7 +17,7 @@ def _init_linear(layer: nn.Linear) -> None:
     nn.init.zeros_(layer.bias)
 
 
-class DiscreteActor(nn.Module):
+class DiscretePolicy(nn.Module):
     def __init__(self, obs_shape: tuple[int,...], n_actions: int, hidden_dim: int = 128):
         super().__init__()
         in_dim = int(np.prod(obs_shape))

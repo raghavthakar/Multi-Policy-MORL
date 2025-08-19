@@ -5,7 +5,7 @@ import numpy as np, random, torch
 import hashlib
 import mo_gymnasium as mo_gym
 
-from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
+# from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import rollout
 from catserl.shared import actors

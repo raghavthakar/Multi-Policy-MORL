@@ -1,28 +1,15 @@
+# checkpoint.py
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Any, List
+
 import torch
 import numpy as np
 
 from catserl.shared.actors import Actor
 
 class Checkpoint:
-    """
-    Minimal, foolproof checkpoint for the *merged* islands.
-
-    Saves only what Stage 2 needs:
-      • GA population (as GeneticActor with weights loaded from flat tensors)
-      • critics per island (entire modules moved to CPU for portability)
-      • island weight vectors
-      • a small meta blob (seed, cfg snapshot)
-
-    Usage
-    -----
-    ckpt = Checkpoint(path)
-    ckpt.save_merged(pop, critics_dict, weights_by_island, cfg, seed)
-
-    pop, critics_dict, weights_by_island, meta = ckpt.load_merged(device)
-    """
+    """Handles saving and loading the merged population and critics for Stage 2."""
 
     VERSION = 1
 
@@ -30,92 +17,96 @@ class Checkpoint:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    # -------------------------- SAVE -------------------------- #
     @torch.no_grad()
     def save_merged(
         self,
-        population: List["Actor"],
+        population: List[Actor],
         critics_by_island: Dict[int, torch.nn.Module],
         weights_by_island: Dict[int, np.ndarray],
         cfg: Dict[str, Any],
         seed: int,
     ) -> None:
-        actors_blob: List[Dict[str, Any]] = []
+        """Saves the necessary components to a single file."""
+        actors_blob = []
         for actor in population:
-            flat = actor.flat_params().detach().cpu().clone()
-            actors_blob.append(
-                {
-                    "kind": str(actor.kind),
-                    "pop_id": int(actor.pop_id) if actor.pop_id is not None else -1,
-                    "obs_shape": tuple(int(x) for x in actor.impl.obs_shape),
-                    "n_actions": int(actor.impl.n_actions),
-                    "hidden_dim": int(actor.impl.hidden_dim),
-                    "flat": flat,
-                }
-            )
+            actors_blob.append({
+                # Actor configuration
+                "kind": actor.kind,
+                "pop_id": actor.pop_id,
+                "obs_shape": actor.obs_shape,
+                "n_actions": actor.n_actions,
+                # FIX: Use the new public property instead of _impl
+                "hidden_dim": actor.hidden_dim,
+                # Actor state
+                "flat": actor.flat_params().cpu(),
+                "buffer": {
+                    "states": actor.buffer.states,
+                    "actions": actor.buffer.actions,
+                    "rewards": actor.buffer.rewards,
+                    "next_states": actor.buffer.next_states,
+                    "dones": actor.buffer.dones,
+                    "ptr": actor.buffer.ptr,
+                    "max_steps": actor.buffer.max_steps,
+                    "max_steps": actor.buffer.max_steps,
+                },
+            })
 
-        critics_blob: Dict[str, Any] = {}
-        for island_id, critic in critics_by_island.items():
-            # Move to CPU for portability; store whole module for plug‑and‑play use.
-            critic_cpu = critic.to("cpu")
-            critics_blob[str(int(island_id))] = critic_cpu
-
-        weights_blob = {str(int(k)): np.asarray(v, dtype=np.float32).tolist() for k, v in weights_by_island.items()}
+        critics_blob = {str(k): v.cpu() for k, v in critics_by_island.items()}
+        weights_blob = {str(k): v.tolist() for k, v in weights_by_island.items()}
 
         payload = {
             "version": self.VERSION,
-            "meta": {
-                "seed": int(seed),
-                "cfg": cfg,
-            },
+            "meta": {"seed": seed, "cfg": cfg},
             "actors": actors_blob,
             "critics": critics_blob,
             "weights": weights_blob,
         }
 
-        # Single-file atomic-ish save
+        # Use a temporary file for a safer save operation
         tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
         torch.save(payload, tmp_path)
         tmp_path.replace(self.path)
 
-    # -------------------------- LOAD -------------------------- #
     @torch.no_grad()
-    def load_merged(
-        self,
-        device: torch.device | str = "cpu",
-        *,
-        path: str | Path | None = None,   # <-- explicit override
-    ):
-        device = torch.device(device)
-        load_path = Path(path) if path is not None else self.path
-        if not load_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {load_path}")
+    def load_merged(self, device: torch.device | str = "cpu", path: Path | str = None):
+        """Loads and reconstructs the population and critics."""
+        self.path = path
+        
+        if not self.path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {self.path}")
 
-        # PyTorch 2.6 defaults to weights_only=True; we need full Modules.
-        try:
-            payload = torch.load(load_path, map_location="cpu", weights_only=False)
-        except TypeError:
-            payload = torch.load(load_path, map_location="cpu")
+        payload = torch.load(self.path, map_location="cpu", weights_only=False)
 
-        if int(payload.get("version", 0)) != self.VERSION:
-            raise RuntimeError(f"Checkpoint version mismatch: found {payload.get('version')}, expected {self.VERSION}")
+        if payload.get("version") != self.VERSION:
+            raise RuntimeError(f"Checkpoint version mismatch: expected {self.VERSION}")
 
-        from catserl.shared.actors import Actor
-        pop = []
-        for a in payload["actors"]:
+        population = []
+        for actor_data in payload["actors"]:
             actor = Actor(
-                kind=str(a['kind']),
-                pop_id=int(a["pop_id"]),
-                obs_shape=tuple(a["obs_shape"]),
-                n_actions=int(a["n_actions"]),
-                hidden_dim=int(a["hidden_dim"]),
+                kind=actor_data['kind'],
+                pop_id=actor_data["pop_id"],
+                obs_shape=actor_data["obs_shape"],
+                n_actions=actor_data["n_actions"],
+                hidden_dim=actor_data["hidden_dim"],
+                buffer_size=actor_data["buffer"]["max_steps"],
                 device=device,
             )
-            flat = a["flat"].to(device)
-            actor.load_flat_params(flat)
-            pop.append(actor)
+            actor.load_flat_params(actor_data["flat"].to(device))
 
-        critics_dict = {int(k): v.to(device) for k, v in payload["critics"].items()}
-        weights_by_island = {int(k): np.asarray(v, dtype=np.float32) for k, v in payload["weights"].items()}
+            # Restore buffer state
+            buf_data = actor_data["buffer"]
+            actor.buffer.states = buf_data["states"]
+            actor.buffer.actions = buf_data["actions"]
+            actor.buffer.rewards = buf_data["rewards"]
+            actor.buffer.next_states = buf_data["next_states"]
+            actor.buffer.dones = buf_data["dones"]
+            actor.buffer.ptr = buf_data["ptr"]
+            actor.buffer.max_steps = buf_data["max_steps"]
+            
+            population.append(actor)
+
+        critics = {int(k): v.to(device) for k, v in payload["critics"].items()}
+        weights = {int(k): np.array(v) for k, v in payload["weights"].items()}
         meta = payload.get("meta", {})
-        return pop, critics_dict, weights_by_island, meta
+
+        return population, critics, weights, meta

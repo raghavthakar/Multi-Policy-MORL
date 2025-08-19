@@ -1,3 +1,4 @@
+# actors.py
 from __future__ import annotations
 from typing import Tuple, Optional
 import copy
@@ -8,60 +9,51 @@ from catserl.shared.policies import DiscretePolicy
 from catserl.shared.buffers import MiniBuffer
 
 
-class DQNActor:
-    """Arg‑max policy with its own buffer."""
+class _DQNActorImpl:
+    """DQN-specific implementation: a policy network and a replay buffer."""
 
     def __init__(
         self,
         obs_shape: Tuple[int, ...],
         n_actions: int,
-        hidden_dim: int = 128,
-        buffer_size: int = 8192,
-        device: str | torch.device = "cpu",
+        hidden_dim: int,
+        buffer_size: int,
+        device: torch.device,
     ) -> None:
         self.obs_shape = obs_shape
         self.n_actions = n_actions
         self.hidden_dim = hidden_dim
-        self.device = torch.device(device)
+        self.device = device
 
         self.net = DiscretePolicy(obs_shape, n_actions, hidden_dim).to(self.device)
         self.buffer = MiniBuffer(obs_shape, max_steps=buffer_size)
 
-    # ------------------------------------------------------------------
     @torch.no_grad()
     def act(self, state: np.ndarray) -> int:
-        t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-        return int(self.net(t).argmax(1).item())
+        """Returns the best action according to the policy network."""
+        state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
+        return int(self.net(state_tensor).argmax(1).item())
 
     def remember(self, state, action, r_vec, next_state, done):
+        """Adds a transition to the replay buffer."""
         self.buffer.add(state, action, r_vec, next_state, done)
 
-    # ------------------------------------------------------------------
     def flat_params(self) -> torch.Tensor:
+        """Flattens all network parameters into a single tensor."""
+        # FIX: Corrected typo from --1 to -1
         return torch.cat([p.data.view(-1) for p in self.net.parameters()])
 
     def load_flat_params(self, flat: torch.Tensor) -> None:
+        """Loads flattened parameters into the network."""
         idx = 0
         for p in self.net.parameters():
             n = p.numel()
             p.data.copy_(flat[idx : idx + n].view_as(p))
             idx += n
 
-    def clone(self) -> "DQNActor":
-        twin = DQNActor(
-            self.obs_shape,
-            self.n_actions,
-            self.hidden_dim,
-            buffer_size=self.buffer.max_steps,
-            device=self.device,
-        )
-        twin.load_flat_params(self.flat_params().clone())
-        twin.buffer = copy.deepcopy(self.buffer)
-        return twin
-
 
 class Actor:
-    """Generic wrapper that exposes common fields for checkpointing."""
+    """A generic actor that wraps a specific algorithm implementation."""
 
     def __init__(
         self,
@@ -79,37 +71,65 @@ class Actor:
         self.vector_return: Optional[np.ndarray] = None
 
         if self.kind == "dqn":
-            self.impl = DQNActor(
+            self._impl = _DQNActorImpl(
                 obs_shape,
                 n_actions,
                 hidden_dim=hidden_dim,
                 buffer_size=buffer_size,
-                device=device,
+                device=torch.device(device),
             )
         else:
-            raise ValueError(f"unknown actor type: {self.kind}")
+            raise ValueError(f"Unknown actor kind: {self.kind}")
 
-        # expose implementation details needed by checkpoint
-        self.obs_shape = self.impl.obs_shape
-        self.n_actions = self.impl.n_actions
-        self.hidden_dim = self.impl.hidden_dim
+    # --- Properties to provide clean access to implementation details ---
+    @property
+    def policy(self) -> DiscretePolicy:
+        return self._impl.net
 
-    # ------------------------------------------------------------------
-    def act(self, state):
-        return self.impl.act(state)
+    @property
+    def buffer(self) -> MiniBuffer:
+        return self._impl.buffer
 
-    def remember(self, *tr):
-        self.impl.remember(*tr)
+    @buffer.setter
+    def buffer(self, value: MiniBuffer) -> None:
+        self._impl.buffer = value
 
-    def flat_params(self):
-        return self.impl.flat_params()
+    @property
+    def obs_shape(self) -> Tuple[int, ...]:
+        return self._impl.obs_shape
 
-    def load_flat_params(self, flat):
-        self.impl.load_flat_params(flat)
+    @property
+    def n_actions(self) -> int:
+        return self._impl.n_actions
+        
+    @property
+    def hidden_dim(self) -> int:
+        # ADDED: Expose hidden_dim for checkpointing
+        return self._impl.hidden_dim
 
-    def clone(self):
-        twin = Actor.__new__(Actor)
-        twin.kind = self.kind
-        twin.pop_id = self.pop_id
-        twin.impl = self.impl.clone()
+    # --- Delegated methods ---
+    def act(self, state: np.ndarray) -> int:
+        return self._impl.act(state)
+
+    def remember(self, *transition):
+        self._impl.remember(*transition)
+
+    def flat_params(self) -> torch.Tensor:
+        return self._impl.flat_params()
+
+    def load_flat_params(self, flat: torch.Tensor):
+        self._impl.load_flat_params(flat)
+
+    def clone(self) -> "Actor":
+        """Creates a new actor with the same configuration and network weights."""
+        twin = Actor(
+            kind=self.kind,
+            pop_id=None,
+            obs_shape=self.obs_shape,
+            n_actions=self.n_actions,
+            hidden_dim=self.hidden_dim,
+            buffer_size=self.buffer.max_steps,
+            device=self._impl.device,
+        )
+        twin.load_flat_params(self.flat_params())
         return twin

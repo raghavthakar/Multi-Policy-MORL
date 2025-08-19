@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple, Any
 import torch
 import numpy as np
 
-from catserl.island.genetic_actor import GeneticActor
+from catserl.shared.actors import DQNActor
 
 class Checkpoint:
     """
@@ -34,7 +34,7 @@ class Checkpoint:
     @torch.no_grad()
     def save_merged(
         self,
-        population: List["GeneticActor"],
+        population: List["DQNActor"],
         critics_by_island: Dict[int, torch.nn.Module],
         weights_by_island: Dict[int, np.ndarray],
         cfg: Dict[str, Any],
@@ -99,10 +99,10 @@ class Checkpoint:
         if int(payload.get("version", 0)) != self.VERSION:
             raise RuntimeError(f"Checkpoint version mismatch: found {payload.get('version')}, expected {self.VERSION}")
 
-        from catserl.island.genetic_actor import GeneticActor
+        from catserl.shared.actors import DQNActor
         pop = []
         for a in payload["actors"]:
-            actor = GeneticActor(
+            actor = DQNActor(
                 pop_id=int(a["pop_id"]),
                 obs_shape=tuple(a["obs_shape"]),
                 n_actions=int(a["n_actions"]),

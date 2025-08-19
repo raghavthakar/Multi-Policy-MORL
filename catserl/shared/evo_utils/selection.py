@@ -15,13 +15,13 @@ from typing import List
 import numpy as np
 import pygmo as pg  # hard dependency
 
-from catserl.island.genetic_actor import GeneticActor  # adjust path if moved
+from catserl.shared.actors import DQNActor  # adjust path if moved
 
 
 # ------------------------------------------------------------------ #
 #  Scalar fitness (Stage-1)
 # ------------------------------------------------------------------ #
-def elitist_select(pop: List[GeneticActor], mu: int) -> List[GeneticActor]:
+def elitist_select(pop: List[DQNActor], mu: int) -> List[DQNActor]:
     """Keep the top-`mu` individuals by scalar .fitness (descending)."""
     if mu > len(pop):
         raise ValueError(f"mu ({mu}) > population size ({len(pop)})")
@@ -31,7 +31,7 @@ def elitist_select(pop: List[GeneticActor], mu: int) -> List[GeneticActor]:
 # ------------------------------------------------------------------ #
 #  NSGA-II selection (Stage-2)
 # ------------------------------------------------------------------ #
-def nondominated_select(pop: List[GeneticActor], mu: int) -> List[GeneticActor]:
+def nondominated_select(pop: List[DQNActor], mu: int) -> List[DQNActor]:
     """
     Select `mu` individuals via NSGA-II (non-dominated sorting + crowding).
 

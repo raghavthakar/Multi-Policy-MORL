@@ -4,7 +4,7 @@ from typing import Dict
 import torch, numpy as np
 import torch.nn.functional as F
 
-from catserl.island.genetic_actor import GeneticActor
+from catserl.shared.actors import DQNActor
 
 def fill_child_buffer_from_parents(child, parent1, parent2):
     """
@@ -42,11 +42,11 @@ def fill_child_buffer_from_parents(child, parent1, parent2):
     for s, a in zip(states, actions):
         child.buffer.add(s, a)
 
-def distilled_crossover(parent1: GeneticActor,
-                        parent2: GeneticActor,
+def distilled_crossover(parent1: DQNActor,
+                        parent2: DQNActor,
                         critic: torch.nn.Module,
                         cfg: Dict,
-                        device: torch.device | str = "cpu") -> GeneticActor:
+                        device: torch.device | str = "cpu") -> DQNActor:
     """
     Implementation of Algorithm 1 (PDERL).
 
@@ -116,12 +116,12 @@ def distilled_crossover(parent1: GeneticActor,
 #  MOPDERL variant (caller decides which parent is better / worse)
 # --------------------------------------------------------------------------- #
 def mo_distilled_crossover(
-    better_parent: GeneticActor,
-    worse_parent: GeneticActor,
+    better_parent: DQNActor,
+    worse_parent: DQNActor,
     critic: torch.nn.Module,
     cfg: Dict,
     device: torch.device | str = "cpu",
-) -> GeneticActor:
+) -> DQNActor:
     """
     Multi-objective distilled crossover (Tran-Long et al., 2023)
 

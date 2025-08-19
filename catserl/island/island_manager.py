@@ -8,7 +8,7 @@ import mo_gymnasium as mo_gym
 from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import rollout
-from catserl.island import genetic_actor
+from catserl.shared import actors
 
 
 class IslandManager:
@@ -61,7 +61,7 @@ class IslandManager:
                                cfg["dqn"],
                                device)
         
-        self.pop = [genetic_actor.GeneticActor(self.island_id, 
+        self.pop = [actors.DQNActor(self.island_id, 
                                                self.env.observation_space.shape, 
                                                self.env.action_space.n, 
                                                buffer_size=cfg["mini_buffer_size"],
@@ -82,7 +82,7 @@ class IslandManager:
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
         flat, hid = self.worker.export_policy_params()
-        rl_actor = genetic_actor.GeneticActor(self.island_id, 
+        rl_actor = actors.DQNActor(self.island_id, 
                                               self.env.observation_space.shape,
                                               self.env.action_space.n,
                                               hidden_dim=hid,

@@ -10,13 +10,13 @@ where  J = ∂Q(s, πθ(s)) / ∂θ   averaged over a mini-batch of states.
 from __future__ import annotations
 from typing import List
 import torch, numpy as np
-from catserl.island.genetic_actor import GeneticActor
+from catserl.shared.actors import DQNActor
 
 
 # --------------------------------------------------------------------------- #
 # helper: ‖J‖_2  (batch-averaged)
 # --------------------------------------------------------------------------- #
-def _jacobian_norm(actor: GeneticActor,
+def _jacobian_norm(actor: DQNActor,
                    critic: torch.nn.Module,
                    states: torch.Tensor) -> torch.Tensor:
     """
@@ -42,7 +42,7 @@ def _jacobian_norm(actor: GeneticActor,
 # --------------------------------------------------------------------------- #
 # main API
 # --------------------------------------------------------------------------- #
-def proximal_mutate(pop: List[GeneticActor],
+def proximal_mutate(pop: List[DQNActor],
                     critic: torch.nn.Module,
                     sigma: float = 0.02,
                     batch_size: int = 32,

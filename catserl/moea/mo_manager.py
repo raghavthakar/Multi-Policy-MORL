@@ -14,7 +14,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 from catserl.orchestrator.checkpoint import Checkpoint
 from catserl.shared.evo_utils import eval_pop
-from catserl.island.genetic_actor import GeneticActor
+from catserl.shared.actors import DQNActor
 from catserl.shared.buffers import MiniBuffer
 from catserl.moea.basic_visualizer import BasicVisualizer
 
@@ -51,8 +51,8 @@ class MOManager:
         self.visualizer = BasicVisualizer(num_objectives=self.num_objectives)
 
     def _find_gap_and_select_parents(
-        self, population: List['GeneticActor']
-    ) -> Tuple[Optional['GeneticActor'], Optional['GeneticActor']]:
+        self, population: List['DQNActor']
+    ) -> Tuple[Optional['DQNActor'], Optional['DQNActor']]:
         """
         Finds the largest gap in the multi-objective space and returns the two
         actors that define that gap using the "Largest Nearest-Neighbor Distance" method.
@@ -76,7 +76,7 @@ class MOManager:
 
         return parent_a, parent_b
     
-    def _create_offspring(self, parent_a: GeneticActor, parent_b: GeneticActor) -> GeneticActor:
+    def _create_offspring(self, parent_a: DQNActor, parent_b: DQNActor) -> DQNActor:
         """
         Creates a child actor with a mixed buffer and a cloned network from a random parent.
         """
@@ -101,7 +101,7 @@ class MOManager:
         child.buffer = child_buffer
         return child
 
-    def _finetune_child(self, child: GeneticActor, target_scalarisation: np.ndarray, config: dict):
+    def _finetune_child(self, child: DQNActor, target_scalarisation: np.ndarray, config: dict):
         """
         Fine-tunes the child policy using a PPO-style update on the hybrid advantage signal.
         """

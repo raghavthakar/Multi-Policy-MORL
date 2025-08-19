@@ -7,12 +7,12 @@ from __future__ import annotations
 from typing import List, Dict
 import numpy as np
 
-from catserl.island.genetic_actor import GeneticActor
+from catserl.shared.actors import DQNActor
 from catserl.shared.evo_utils.selection import elitist_select
 from catserl.shared.rollout import rollout
 
 
-def eval_pop(pop: List[GeneticActor],
+def eval_pop(pop: List[DQNActor],
                 env,
                 weight_vector: np.ndarray,
                 episodes_per_actor: int = 1,

@@ -18,7 +18,7 @@ from catserl.shared.policies import DiscretePolicy
 from catserl.shared.buffers import MiniBuffer
 
 
-class GeneticActor:
+class DQNActor:
     # ------------------------------------------------------------------ #
     def __init__(self,
                  pop_id: int | None,
@@ -81,9 +81,9 @@ class GeneticActor:
     # ------------------------------------------------------------------ #
     # Deep clone (new buffer, copied weights)
     # ------------------------------------------------------------------ #
-    def clone(self) -> "GeneticActor":
+    def clone(self) -> "DQNActor":
         """Creates a deep clone with a copied buffer and network weights."""
-        clone = GeneticActor(self.pop_id,
+        clone = DQNActor(self.pop_id,
                              self.obs_shape,
                              self.n_actions,
                              self.hidden_dim,

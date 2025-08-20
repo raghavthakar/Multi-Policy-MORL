@@ -1,9 +1,10 @@
-# catserl/erl_manager.py
+# catserl/island/island_manager.py
 from __future__ import annotations
 from typing import List, Dict
 import numpy as np, random, torch
 import hashlib
 import mo_gymnasium as mo_gym
+import gymnasium as gym
 
 # from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl import RLWorker
@@ -55,20 +56,32 @@ class IslandManager:
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
 
+        # Inspect the environment's action space to generalize.
+        if isinstance(self.env.action_space, gym.spaces.Discrete):
+            self.action_type = "discrete"
+            self.action_dim = self.env.action_space.n
+        elif isinstance(self.env.action_space, gym.spaces.Box):
+            self.action_type = "continuous"
+            self.action_dim = self.env.action_space.shape[0]
+        else:
+            raise ValueError(f"Unsupported action space: {type(self.env.action_space)}")
+
         self.worker = RLWorker(self.rl_alg_name,
                                self.env.observation_space.shape,
-                               self.env.action_space.n,
+                               self.action_type,
+                               self.action_dim,
                                self.w,
                                cfg["rl"],
                                device)
-        
+
         self.pop = [actors.Actor(self.rl_alg_name,
                                  self.island_id,
                                  self.env.observation_space.shape,
-                                 self.env.action_space.n,
+                                 self.action_type,
+                                 self.action_dim,
                                  buffer_size=cfg["mini_buffer_size"],
                                  device=device) for _ in range(cfg["pderl"]["pop_size"])]
-        
+
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
         self.gen_counter = 0
         self.migrate_every = int(cfg["pderl"].get("migrate_every_gens", 5))
@@ -87,7 +100,8 @@ class IslandManager:
         rl_actor = actors.Actor(self.rl_alg_name,
                                 self.island_id,
                                 self.env.observation_space.shape,
-                                self.env.action_space.n,
+                                self.action_type,
+                                self.action_dim,
                                 hidden_dim=hid,
                                 device=self.worker.device,)
         rl_actor.load_flat_params(flat)
@@ -139,7 +153,7 @@ class IslandManager:
             self.scalar_returns.append(ret_scalar)
             self.frames_collected += ep_len
             steps_this_gen += ep_len
-        
+
         # Update the RL actor
         # Update the RL actor proportionally to steps collected
         for _ in range(steps_this_gen):

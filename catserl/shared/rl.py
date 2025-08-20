@@ -1,3 +1,4 @@
+# catserl/shared/rl.py
 from __future__ import annotations
 """Minimal pluggable‑algorithm RL worker
 
@@ -136,19 +137,23 @@ class DQN(Algo):
     def __init__(
         self,
         obs_shape: Tuple[int, ...],
-        n_actions: int,
+        action_type: str,
+        action_dim: int,
         scalar_weight: np.ndarray,
         cfg: dict,
         device: torch.device,
     ) -> None:
+        if action_type != "discrete":
+            raise ValueError("DQN algorithm only supports discrete action spaces.")
+        
         self.device = device
-        self.n_actions = n_actions
+        self.n_actions = action_dim
         self.scalar_weight = torch.tensor(scalar_weight, device=device)
 
         # Networks ----------------------------------------------------
         hid = int(cfg.get("hidden_dim", 128))
-        self.net = DuelingQNet(obs_shape, n_actions, hid).to(device)
-        self.tgt = DuelingQNet(obs_shape, n_actions, hid).to(device)
+        self.net = DuelingQNet(obs_shape, self.n_actions, hid).to(device)
+        self.tgt = DuelingQNet(obs_shape, self.n_actions, hid).to(device)
         self.tgt.load_state_dict(self.net.state_dict())
 
         # Optimizer & hyper‑parameters --------------------------------
@@ -160,6 +165,8 @@ class DQN(Algo):
         # Replay buffer ----------------------------------------------
         self.buffer = ReplayBuffer(
             obs_shape,
+            action_type,
+            action_dim,
             capacity=int(cfg.get("buffer_size", 100_000)),
             device=device,
         )
@@ -295,7 +302,8 @@ class RLWorker:
         self,
         algo: str,
         obs_shape: Tuple[int, ...],
-        n_actions: int,
+        action_type: str,
+        action_dim: int,
         scalar_weight: np.ndarray,
         cfg: dict,
         device: torch.device,
@@ -303,7 +311,7 @@ class RLWorker:
         algo = algo.lower()
         if algo == "dqn":
             self.agent: Algo = DQN(
-                obs_shape, n_actions, scalar_weight, cfg, device
+                obs_shape, action_type, action_dim, scalar_weight, cfg, device
             )
         else:
             raise ValueError(

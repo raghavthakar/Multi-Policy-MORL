@@ -1,6 +1,6 @@
 # actors.py
 from __future__ import annotations
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 import copy
 
 import numpy as np
@@ -15,18 +15,28 @@ class _DQNActorImpl:
     def __init__(
         self,
         obs_shape: Tuple[int, ...],
-        n_actions: int,
+        action_type: str,
+        action_dim: int,
         hidden_dim: int,
         buffer_size: int,
         device: torch.device,
     ) -> None:
+        if action_type != "discrete":
+            raise ValueError("DQNActorImpl only supports 'discrete' action spaces.")
+
         self.obs_shape = obs_shape
-        self.n_actions = n_actions
+        self.action_type = action_type
+        self.action_dim = action_dim
         self.hidden_dim = hidden_dim
         self.device = device
 
-        self.net = DiscretePolicy(obs_shape, n_actions, hidden_dim).to(self.device)
-        self.buffer = MiniBuffer(obs_shape, max_steps=buffer_size)
+        self.net = DiscretePolicy(obs_shape, action_dim, hidden_dim).to(self.device)
+        self.buffer = MiniBuffer(
+            obs_shape,
+            action_type,
+            action_dim,
+            max_steps=buffer_size
+        )
 
     @torch.no_grad()
     def act(self, state: np.ndarray) -> int:
@@ -40,7 +50,6 @@ class _DQNActorImpl:
 
     def flat_params(self) -> torch.Tensor:
         """Flattens all network parameters into a single tensor."""
-        # FIX: Corrected typo from --1 to -1
         return torch.cat([p.data.view(-1) for p in self.net.parameters()])
 
     def load_flat_params(self, flat: torch.Tensor) -> None:
@@ -60,7 +69,8 @@ class Actor:
         kind: str,
         pop_id: int | None,
         obs_shape: Tuple[int, ...],
-        n_actions: int,
+        action_type: str,
+        action_dim: int,
         hidden_dim: int = 128,
         buffer_size: int = 8192,
         device: str | torch.device = "cpu",
@@ -69,11 +79,15 @@ class Actor:
         self.pop_id = pop_id
         self.fitness: Optional[float] = None
         self.vector_return: Optional[np.ndarray] = None
+        
+        self.action_type = action_type
+        self.action_dim = action_dim
 
         if self.kind == "dqn":
             self._impl = _DQNActorImpl(
                 obs_shape,
-                n_actions,
+                action_type,
+                action_dim,
                 hidden_dim=hidden_dim,
                 buffer_size=buffer_size,
                 device=torch.device(device),
@@ -100,15 +114,17 @@ class Actor:
 
     @property
     def n_actions(self) -> int:
-        return self._impl.n_actions
-        
+        # Keep n_actions for discrete-specific cases, but raise error if used improperly
+        if self.action_type != "discrete":
+            raise AttributeError("'.n_actions' is only available for discrete action spaces.")
+        return self.action_dim
+
     @property
     def hidden_dim(self) -> int:
-        # ADDED: Expose hidden_dim for checkpointing
         return self._impl.hidden_dim
 
     # --- Delegated methods ---
-    def act(self, state: np.ndarray) -> int:
+    def act(self, state: np.ndarray) -> Union[int, np.ndarray]:
         return self._impl.act(state)
 
     def remember(self, *transition):
@@ -126,7 +142,8 @@ class Actor:
             kind=self.kind,
             pop_id=None,
             obs_shape=self.obs_shape,
-            n_actions=self.n_actions,
+            action_type=self.action_type,
+            action_dim=self.action_dim,
             hidden_dim=self.hidden_dim,
             buffer_size=self.buffer.max_steps,
             device=self._impl.device,

@@ -34,8 +34,8 @@ class Checkpoint:
                 "kind": actor.kind,
                 "pop_id": actor.pop_id,
                 "obs_shape": actor.obs_shape,
-                "n_actions": actor.n_actions,
-                # FIX: Use the new public property instead of _impl
+                "action_type": actor.action_type,
+                "action_dim": actor.action_dim,
                 "hidden_dim": actor.hidden_dim,
                 # Actor state
                 "flat": actor.flat_params().cpu(),
@@ -46,7 +46,6 @@ class Checkpoint:
                     "next_states": actor.buffer.next_states,
                     "dones": actor.buffer.dones,
                     "ptr": actor.buffer.ptr,
-                    "max_steps": actor.buffer.max_steps,
                     "max_steps": actor.buffer.max_steps,
                 },
             })
@@ -70,7 +69,8 @@ class Checkpoint:
     @torch.no_grad()
     def load_merged(self, device: torch.device | str = "cpu", path: Path | str = None):
         """Loads and reconstructs the population and critics."""
-        self.path = path
+        if path:
+            self.path = Path(path)
         
         if not self.path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {self.path}")
@@ -86,7 +86,8 @@ class Checkpoint:
                 kind=actor_data['kind'],
                 pop_id=actor_data["pop_id"],
                 obs_shape=actor_data["obs_shape"],
-                n_actions=actor_data["n_actions"],
+                action_type=actor_data["action_type"],
+                action_dim=actor_data["action_dim"],
                 hidden_dim=actor_data["hidden_dim"],
                 buffer_size=actor_data["buffer"]["max_steps"],
                 device=device,
@@ -100,9 +101,7 @@ class Checkpoint:
             actor.buffer.rewards = buf_data["rewards"]
             actor.buffer.next_states = buf_data["next_states"]
             actor.buffer.dones = buf_data["dones"]
-            actor.buffer.ptr = buf_data["ptr"]
-            actor.buffer.max_steps = buf_data["max_steps"]
-            
+            actor.buffer.ptr = buf_data["ptr"]            
             population.append(actor)
 
         critics = {int(k): v.to(device) for k, v in payload["critics"].items()}

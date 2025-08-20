@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
     if args.resume_stage2 is not None:
         mo_mgr = MOManager(env, 2, args.resume_stage2, device=device)
-        for _ in range(5):
+        for _ in range(75):
             mo_mgr.evolve()
         print("MOManager Stage 2 run complete (resumed from checkpoint).")
         return 0
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
     mgr0 = IslandManager(env, 1, np.array([1, 0]), cfg, seed=seed + 1, device=device)
     mgr1 = IslandManager(env, 2, np.array([0, 1]), cfg, seed=seed + 2, device=device)
 
-    generations = 3
+    generations = 75
     for gen in range(generations):
         mgr0.train_generation()
         mgr1.train_generation()

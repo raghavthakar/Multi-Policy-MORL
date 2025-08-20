@@ -131,3 +131,6 @@ test_reproducibility.sh
 
 # Writing prototype
 writing.md
+
+# Sample data for testing
+sampledata

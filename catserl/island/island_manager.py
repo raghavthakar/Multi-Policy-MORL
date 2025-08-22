@@ -109,60 +109,61 @@ class IslandManager:
         rl_actor.load_flat_params(flat)
         return rl_actor
 
-    # ---- helper for greedy parent selection ------------------------- #
-    def _pick_parents(self, elite):
-        """
-        Choose two *distinct* parents from the `elite` list.
-        Probability ∝ (mu – rank + 1) where rank=1 is best.
-        """
-        mu = len(elite)
-        ranks = np.arange(1, mu + 1)
-        total = mu * (mu + 1) / 2
-        probs = (mu - ranks + 1) / total
-
-        idx_a = self.rs.choice(mu, p=probs)
-        idx_b = idx_a
-        while idx_b == idx_a:
-            idx_b = self.rs.choice(mu, p=probs)
-
-        return elite[idx_a], elite[idx_b]
-
     # ------------------------------------------------------------------ #
-    # ----------  Warm-up generation loop  ------------------------------ #
+    # ----------  Warm-up ---------------------------------------------- #
     # ------------------------------------------------------------------ #
-    def train_generation(self, rl_episodes: int = 10, ea_episodes_per_actor: int = 5) -> Dict:
-        """
-        Collect `rl_episodes` rollouts for the RL worker, let the RL worker learn online.
+    def train(self, rl_episodes: int = 200000) -> Dict:
+        # --- Training Hyperparameters ---
+        total_timesteps = 250_000_000
+        start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
+        update_every_n_steps = 50
+        updates_per_session = 50
 
-        Returns
-        -------
-        Dict with simple metrics you can aggregate or log:
-            {
-              "mean_scalar_return": ... ,
-              "episodes": episodes,
-              "frames": int,
-            }
-        """
-        # Collect experiences for the RL actor
-        steps_this_gen = 0
-        for _ in range(rl_episodes):
-            ret_vec, ep_len = rollout(
-                self.env, self.worker, store_transitions=True, max_ep_len=self.max_ep_len
-            )
-            ret_scalar = float((ret_vec * self.w).sum())
+        # --- Training Loop ---
+        state, _ = self.env.reset()
+        ep_return_vec = None
+        ep_len = 0
+        episodes_completed = 0
 
-            self.vector_returns.append(ret_vec)
-            self.scalar_returns.append(ret_scalar)
-            self.frames_collected += ep_len
-            steps_this_gen += ep_len
+        for t in range(total_timesteps):
+            # Select action: random for the start period, otherwise from the policy
+            action = self.worker.act(state)
 
-        # Update the RL actor
-        # Update the RL actor proportionally to steps collected
-        if self.frames_collected > 750000:
-            for _ in range(steps_this_gen):
-                self.worker.update()
-        
-        self.gen_counter += 1
+            # Step the environment
+            next_state, reward_vec, done, trunc, _ = self.env.step(action)
+            
+            # Store the transition in the agent's buffer
+            self.worker.remember(state, action, reward_vec, next_state, done)
+
+            # Accumulate episode rewards
+            if ep_return_vec is None:
+                ep_return_vec = np.array(reward_vec, dtype=np.float32)
+            else:
+                ep_return_vec += reward_vec
+
+            state = next_state
+            ep_len += 1
+
+            # Perform learning updates
+            if t >= start_timesteps and t % update_every_n_steps == 0:
+                for _ in range(updates_per_session):
+                    self.worker.update()
+
+            # Handle episode termination
+            if done or trunc:
+                # Log episode results
+                scalar_return = (ep_return_vec * self.w).sum()
+                print(f"Total Steps: {t+1}, Episode: {episodes_completed+1}, Ep. Length: {ep_len}, Scalar Return: {scalar_return:.2f}")
+                
+                # Store metrics in the manager
+                self.scalar_returns.append(scalar_return)
+                self.vector_returns.append(ep_return_vec)
+                
+                # Reset for next episode
+                state, _ = self.env.reset()
+                ep_return_vec = None
+                ep_len = 0
+                episodes_completed += 1
 
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #

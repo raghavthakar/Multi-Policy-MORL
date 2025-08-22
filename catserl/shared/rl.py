@@ -341,23 +341,27 @@ class TD3(Algo): # Inherit from Algo
 		self.scalar_weight = torch.tensor(scalar_weight, device=device)
 		
 		# Load parameters from cfg for consistency and correctness
-		self.discount = float(cfg.get("discount", 0.99))
-		self.tau = float(cfg.get("tau", 0.005))
-		self.policy_noise = float(cfg.get("policy_noise", 0.2))
-		self.noise_clip = float(cfg.get("noise_clip", 0.5))
-		self.policy_freq = int(cfg.get("policy_freq", 2))
-		self.batch_size = int(cfg.get("batch_size", 256))
-		self.exploration_noise = float(cfg.get("exploration_noise", 0.1))
-		self.rl_kick_in_frames = 750000
+		td3_cfg = cfg['td3'] # Get the 'td3' sub-dictionary
+		self.discount = float(td3_cfg.get("discount", 0.99))
+		self.tau = float(td3_cfg.get("tau", 0.005))
+		self.policy_noise = float(td3_cfg.get("policy_noise", 0.2))
+		self.noise_clip = float(td3_cfg.get("noise_clip", 0.5))
+		self.policy_freq = int(td3_cfg.get("policy_freq", 2))
+		self.exploration_noise = float(td3_cfg.get("exploration_noise", 0.1))
+		self.rl_kick_in_frames = int(td3_cfg.get("start_timesteps", 25000))
+		self.batch_size = int(td3_cfg.get("batch_size", 256))
+		self.buffer_size = int(td3_cfg.get("buffer_size", 1_000_000))
+		critic_lr = float(td3_cfg.get("critic_lr", 3e-4))
+		actor_lr = float(td3_cfg.get("actor_lr", 8e-5))
 
 		# Networks ----------------------------------------------------
 		self.actor = ContinuousPolicy(obs_shape, self.n_actions, max_action).to(self.device)
 		self.actor_target = copy.deepcopy(self.actor)
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), actor_lr)
 
 		self.critic = TD3Critic(obs_shape, self.n_actions).to(self.device)
 		self.critic_target = copy.deepcopy(self.critic)
-		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)
+		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), critic_lr)
 
 		self.max_action = max_action
 
@@ -391,7 +395,7 @@ class TD3(Algo): # Inherit from Algo
 			size=self.n_actions
 		)
 		action_with_noise = action + noise
-    
+	
 		# Step 3: Clip the final action to ensure it's within the valid range
 		clipped_action = action_with_noise.clip(-self.max_action, self.max_action)
 
@@ -401,7 +405,7 @@ class TD3(Algo): # Inherit from Algo
 		self.buffer.push(*transition)
 
 	def update(self):
-		print("updating", self.total_it)
+		# print("updating", self.total_it)
 		self.total_it += 1
 		# Sample replay buffer 
 		state, action, r_vec, next_state, done = self.buffer.sample(self.batch_size)

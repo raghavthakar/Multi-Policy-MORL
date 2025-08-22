@@ -41,6 +41,8 @@ def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, ot
     while not (done or trunc):
         a = actor.act(s)
         s2, r_vec, done, trunc, info = env.step(a)
+        if done == True:
+            print("WOOOOO")
 
         if ret_vec is None:
             ret_vec = np.array(r_vec, dtype=np.float32)
@@ -48,9 +50,9 @@ def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, ot
             ret_vec += r_vec
 
         if store_transitions and hasattr(actor, "remember"):
-            actor.remember(s, a, r_vec, s2, done or trunc)
+            actor.remember(s, a, r_vec, s2, done)
             if other_actor is not None and hasattr(other_actor, "remember"):
-                other_actor.remember(s, a, r_vec, s2, done or trunc)
+                other_actor.remember(s, a, r_vec, s2, done)
 
         s = s2
         ep_len += 1

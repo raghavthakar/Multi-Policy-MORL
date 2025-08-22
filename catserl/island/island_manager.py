@@ -6,7 +6,6 @@ import hashlib
 import mo_gymnasium as mo_gym
 import gymnasium as gym
 
-# from catserl.shared.evo_utils import crossover, eval_pop, proximal_mutation, selection
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import rollout
 from catserl.shared import actors
@@ -49,7 +48,7 @@ class IslandManager:
         self.island_id = island_id
         self.cfg = cfg
         self.env = env
-        self.rl_alg_name = 'dqn'
+        self.rl_alg_name = 'td3'
         # -------------------------------------------------------------- #
         # local deterministic RNG for this island
         self.rs = np.random.RandomState(seed)
@@ -60,9 +59,11 @@ class IslandManager:
         if isinstance(self.env.action_space, gym.spaces.Discrete):
             self.action_type = "discrete"
             self.action_dim = self.env.action_space.n
+            self.max_action = None # Cannot be retrieved for discrete gym envs
         elif isinstance(self.env.action_space, gym.spaces.Box):
             self.action_type = "continuous"
             self.action_dim = self.env.action_space.shape[0]
+            self.max_action = self.env.action_space.high[0]
         else:
             raise ValueError(f"Unsupported action space: {type(self.env.action_space)}")
 
@@ -70,6 +71,7 @@ class IslandManager:
                                self.env.observation_space.shape,
                                self.action_type,
                                self.action_dim,
+                               self.max_action,
                                self.w,
                                cfg["rl"],
                                device)
@@ -156,8 +158,10 @@ class IslandManager:
 
         # Update the RL actor
         # Update the RL actor proportionally to steps collected
-        for _ in range(steps_this_gen):
-            self.worker.update()
+        if self.frames_collected > 750000:
+            for _ in range(steps_this_gen):
+                self.worker.update()
+        
         self.gen_counter += 1
 
     # ------------------------------------------------------------------ #

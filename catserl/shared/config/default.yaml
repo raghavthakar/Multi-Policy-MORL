@@ -15,8 +15,8 @@ rl:
   tau:               0.005      # soft-update factor for target net
 
   # replay + SGD
-  buffer_size:       100_000    # main ReplayBuffer capacity
-  batch_size:        64
+  buffer_size:       1_000_000    # main ReplayBuffer capacity
+  batch_size:        256
 
   # ε-greedy exploration schedule
   eps_start:         1.0
@@ -51,4 +51,4 @@ env:
   name: "four-room-v0"
   num_objectives: 3             # m  (set by your research task)
   beta_novelty: 0.05             # intrinsic-reward scale
-  max_ep_len: 200               # max episode length, -1 for no limit
+  max_ep_len: -1               # max episode length, -1 for no limit

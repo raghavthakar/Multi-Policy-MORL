@@ -63,12 +63,14 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 42))
     device = torch.device(cfg.get("device", "cpu"))
 
-    env = mo_gym.make("mo-mountaincar-timemove-v0")
+    env1 = mo_gym.make("mo-mountaincarcontinuous-v0")
+    env2 = mo_gym.make("mo-mountaincarcontinuous-v0")
 
     # Seeding
     random.seed(seed)
     np.random.seed(seed)
-    env.reset(seed=seed)
+    env1.reset(seed=seed)
+    env2.reset(seed=seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
@@ -76,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
     if args.resume_stage2 is not None:
-        mo_mgr = MOManager(env, 2, args.resume_stage2, device=device)
+        mo_mgr = MOManager(env1, 2, args.resume_stage2, device=device)
         for _ in range(75):
             mo_mgr.evolve()
         print("MOManager Stage 2 run complete (resumed from checkpoint).")
@@ -84,10 +86,10 @@ def main(argv: list[str] | None = None) -> int:
     
     # ---------- Stage 1 (islands) ----------
     # Two islands with different objective weights.
-    mgr0 = IslandManager(env, 1, np.array([1, 0]), cfg, seed=seed + 1, device=device)
-    mgr1 = IslandManager(env, 2, np.array([0, 1]), cfg, seed=seed + 2, device=device)
+    mgr0 = IslandManager(env1, 1, np.array([1, 0]), cfg, seed=seed + 1, device=device)
+    mgr1 = IslandManager(env2, 2, np.array([0, 1]), cfg, seed=seed + 2, device=device)
 
-    generations = 75
+    generations = 3000000
     for gen in range(generations):
         mgr0.train_generation()
         mgr1.train_generation()

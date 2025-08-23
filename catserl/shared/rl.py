@@ -374,8 +374,8 @@ class TD3(Algo): # Inherit from Algo
 			device=device,
 		)
 
-		self.total_it = 0
-		self.frames_idx = 0
+		self.total_it = 0 # How many updates have been made
+		self.frames_idx = 0 # How many frames have been collected
 
 	def act(self, state: np.ndarray):
 		self.frames_idx += 1
@@ -460,6 +460,16 @@ class TD3(Algo): # Inherit from Algo
 			for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 				
+	def export_policy_params(self):
+		"""
+		Exports the actor's policy parameters by calling the method
+		on the ContinuousPolicy instance.
+		"""
+		return self.actor.export_params()
+	
+	def get_critic(self):
+		return self.critic_target
+
 	# MODIFIED: Add save/load methods to satisfy the Algo interface
 	def save(self, path: str) -> None:
 		torch.save({
@@ -542,4 +552,4 @@ class RLWorker:
 		return getattr(self.agent, "export_policy_params", None)()
 	
 	def critic(self):
-		return self.agent.net
+		return self.agent.get_critic()

@@ -105,6 +105,7 @@ class IslandManager:
                                 self.action_type,
                                 self.action_dim,
                                 hidden_dim=hid,
+                                max_action=self.max_action,
                                 device=self.worker.device,)
         rl_actor.load_flat_params(flat)
         return rl_actor
@@ -112,9 +113,9 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     # ----------  Warm-up ---------------------------------------------- #
     # ------------------------------------------------------------------ #
-    def train(self, rl_episodes: int = 200000) -> Dict:
+    def train(self) -> Dict:
         # --- Training Hyperparameters ---
-        total_timesteps = 250_000_000
+        total_timesteps = 20000
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 50
         updates_per_session = 50

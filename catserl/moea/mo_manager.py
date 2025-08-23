@@ -24,6 +24,8 @@ __all__ = ["MOManager"]
 class MOManager:
     """Manages the multi-objective (MO) stage of training."""
 
+    # In MOManager class
+
     def __init__(
         self,
         env,
@@ -47,14 +49,22 @@ class MOManager:
         self.critics = critics_dict
         self.num_objectives = num_objectives
 
+        # --- MODIFIED: Dynamically determine the algorithm from the loaded population ---
+        if not self.population:
+            raise ValueError("Cannot initialize MOManager: The loaded population is empty.")
+        
+        # Inspect the first actor to determine the algorithm type for this session
+        self.rl_alg = self.population[0].kind
+        # --- END MODIFICATION ---
+
         # Create finetuner via factory
-        self.rl_alg = "dqn"  # TEMPORARY: Hardcoded for now
         self.finetuner = Finetuner.create(self.rl_alg)
 
         print(
             f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics."
         )
         print(f"[MOManager] Detected {self.num_objectives} objectives.")
+        # This will now correctly report 'DQN' or 'TD3'
         print(f"[MOManager] Using finetuning strategy for '{self.rl_alg.upper()}' algorithm.")
 
 

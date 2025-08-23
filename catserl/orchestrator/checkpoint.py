@@ -37,6 +37,7 @@ class Checkpoint:
                 "action_type": actor.action_type,
                 "action_dim": actor.action_dim,
                 "hidden_dim": actor.hidden_dim,
+                "max_action": actor.max_action, # ADDED: Save the max_action value
                 # Actor state
                 "flat": actor.flat_params().cpu(),
                 "buffer": {
@@ -89,6 +90,8 @@ class Checkpoint:
                 action_type=actor_data["action_type"],
                 action_dim=actor_data["action_dim"],
                 hidden_dim=actor_data["hidden_dim"],
+                # MODIFIED: Load max_action, with a default for backward compatibility
+                max_action=actor_data.get("max_action", 1.0),
                 buffer_size=actor_data["buffer"]["max_steps"],
                 device=device,
             )

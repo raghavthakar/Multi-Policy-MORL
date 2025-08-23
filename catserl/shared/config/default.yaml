@@ -28,7 +28,7 @@ rl:
     noise_clip:      0.5        # Clamp for the target policy noise
     policy_freq:     2          # Frequency of delayed policy updates
     exploration_noise: 0.1      # Std of Gaussian noise for exploration
-    start_timesteps: 10000000   # Number of steps for random action exploration
+    start_timesteps: 15000      # Number of steps for random action exploration
     buffer_size:     1_000_000  # main ReplayBuffer capacity
     batch_size:      256
 

@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions import Independent, Normal
 
 
 def _init_linear(layer: nn.Linear) -> None:
@@ -44,18 +45,49 @@ class DiscretePolicy(nn.Module):
 		return log_prob.squeeze(1)
 
 class ContinuousPolicy(nn.Module):
-	def __init__(self, state_dim, action_dim, max_action):
-		super(ContinuousPolicy, self).__init__()
+    def __init__(self, state_dim, action_dim, max_action):
+        super(ContinuousPolicy, self).__init__()
 
-		in_dim = int(np.prod(state_dim))
-		self.l1 = nn.Linear(in_dim, 256)
-		self.l2 = nn.Linear(256, 256)
-		self.l3 = nn.Linear(256, action_dim)
-		
-		self.max_action = max_action
-		
+        in_dim = int(np.prod(state_dim))
+        self.l1 = nn.Linear(in_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, action_dim)
+        
+        self.max_action = max_action
+        
+        log_std_init = -0.5 * np.ones(action_dim, dtype=np.float32)
+        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std_init), requires_grad=False)
 
-	def forward(self, state):
-		a = F.relu(self.l1(state))
-		a = F.relu(self.l2(a))
-		return self.max_action * torch.tanh(self.l3(a))
+
+    def forward(self, state):
+        a = F.relu(self.l1(state))
+        a = F.relu(self.l2(a))
+        return self.max_action * torch.tanh(self.l3(a))
+
+    def get_log_prob(self, state, action):
+        mean = self.forward(state)
+        std = torch.exp(self.log_std)
+        base_dist = Normal(mean, std)
+        dist = Independent(base_dist, 1)
+        return dist.log_prob(action)
+        
+    def export_params(self) -> tuple[torch.Tensor, int]:
+        """
+        Flattens and returns all network parameters and the hidden dimension size.
+        This is useful for creating a 'genome' for evolutionary algorithms.
+        """
+        with torch.no_grad():
+            # --- MODIFIED: Include self.log_std in the flattened parameters ---
+            # This ensures that all parameters of the model are correctly exported.
+            flat_params = torch.cat([
+                self.l1.weight.flatten(),
+                self.l1.bias,
+                self.l2.weight.flatten(),
+                self.l2.bias,
+                self.l3.weight.flatten(),
+                self.l3.bias,
+                self.log_std.flatten(), # Add the missing parameter
+            ]).cpu().clone()
+
+        hidden_dim = self.l1.out_features
+        return flat_params, hidden_dim

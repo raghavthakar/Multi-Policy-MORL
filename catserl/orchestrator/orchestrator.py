@@ -1,19 +1,5 @@
 # catserl/orchestrator/orchestrator.py
 
-"""
-CATSERL Orchestrator
-
-Run the training orchestrator. Allows specifying a YAML config via CLI.
-
-Usage examples:
-- Default config (relative to package):
-    python -m catserl.orchestrator.orchestrator
-- Custom config:
-    python -m catserl.orchestrator.orchestrator -c /path/to/config.yaml
-- Resume directly into Stage 2 from a merged checkpoint:
-    python -m catserl.orchestrator.orchestrator --resume-stage2 /path/to/merged.ckpt
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -63,8 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 42))
     device = torch.device(cfg.get("device", "cpu"))
 
-    env1 = mo_gym.make("mo-mountaincarcontinuous-v0")
-    env2 = mo_gym.make("mo-mountaincarcontinuous-v0")
+    env1 = mo_gym.make("mo-swimmer-v5")
+    env2 = mo_gym.make("mo-swimmer-v5")
 
     # Seeding
     random.seed(seed)
@@ -89,16 +75,14 @@ def main(argv: list[str] | None = None) -> int:
     mgr0 = IslandManager(env1, 1, np.array([1, 0]), cfg, seed=seed + 1, device=device)
     mgr1 = IslandManager(env2, 2, np.array([0, 1]), cfg, seed=seed + 2, device=device)
 
-    generations = 3000000
-    for gen in range(generations):
-        mgr0.train_generation()
-        mgr1.train_generation()
-        print(
-            f"Gen {gen+1:02d} | "
-            f"Obj-0 10-ep mean: {np.mean(mgr0.get_scalar_returns()[-10:]):.2f} "
-            f"Obj-0 10-ep mean: {np.mean(mgr0.get_vector_returns()[-10:], axis=0)} "
-            f"| Obj-1 10-ep mean: {np.mean(mgr1.get_scalar_returns()[-10:]):.2f}"
-        )
+    mgr0.train()
+    mgr1.train()
+    print(
+        f"Obj-0 10-ep mean: {np.mean(mgr0.get_scalar_returns()[-10:]):.2f} "
+        f"Obj-0 10-ep mean: {np.mean(mgr0.get_vector_returns()[-10:], axis=0)} "
+        f"| Obj-1 10-ep mean: {np.mean(mgr1.get_scalar_returns()[-10:]):.2f}"
+        f"Obj-0 10-ep mean: {np.mean(mgr1.get_vector_returns()[-10:], axis=0)} "
+    )
 
     # Merge islands for potential Stage 2.
     pop0, id0, critic0, w0 = mgr0.export_island()

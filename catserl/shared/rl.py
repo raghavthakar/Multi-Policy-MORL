@@ -469,6 +469,9 @@ class TD3(Algo): # Inherit from Algo
 	
 	def get_critic(self):
 		return self.critic_target
+	
+	def get_buffer(self):
+		return self.buffer
 
 	# MODIFIED: Add save/load methods to satisfy the Algo interface
 	def save(self, path: str) -> None:
@@ -553,3 +556,6 @@ class RLWorker:
 	
 	def critic(self):
 		return self.agent.get_critic()
+	
+	def buffer(self):
+		return self.agent.get_buffer()

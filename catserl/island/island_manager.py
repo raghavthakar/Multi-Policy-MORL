@@ -116,6 +116,7 @@ class IslandManager:
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
         total_timesteps = 200000
+        total_timesteps = 15000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 1
         updates_per_session = 1
@@ -196,4 +197,4 @@ class IslandManager:
             The scalarising weight vector for this island.
         """
         self.pop.append(self._make_rl_actor())
-        return self.pop, self.island_id, self.worker.critic(), self.w
+        return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

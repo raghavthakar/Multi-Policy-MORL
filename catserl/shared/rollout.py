@@ -13,7 +13,7 @@ from typing import Tuple, Any
 import numpy as np
 
 
-def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, other_actor=None) -> Tuple[np.ndarray, int, np.ndarray]:
+def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, other_actor=None, seed: int = None) -> Tuple[np.ndarray, int, np.ndarray]:
     """
     Runs ONE episode and (optionally) stores transitions.
     
@@ -27,13 +27,18 @@ def rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, ot
         Maximum episode length (default: -1, meaning no limit)
     other_actor : policy instance, optional
         If provided, calls other_actor.remember(s, a, r_vec, s2, done) at each step (default: None)
+    seed : int, optional
+        If provided, will reset the environment to exactly the seed.
 
     Returns
     -------
     ret_vec : np.ndarray   -- episode-summed reward vector
     ep_len  : int          -- steps taken
     """
-    s, _ = env.reset()
+    if seed:
+        s, _ = env.reset(seed=seed)
+    else:
+        s, _ = env.reset()
     done, trunc, ep_len = False, False, 0
     ret_vec = None
     ep_len = 0

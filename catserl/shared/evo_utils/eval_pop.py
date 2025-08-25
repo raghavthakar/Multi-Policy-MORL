@@ -45,12 +45,13 @@ def eval_pop(pop: List[Actor],
     w = weight_vector
     fitness_vals = []
     frames_collected = 0
+    seed = 42
 
     for actor in pop:
         vec_return = np.zeros_like(w, dtype=np.float32)
-        for _ in range(episodes_per_actor):
+        for ep_num in range(episodes_per_actor):
             ret_vec, ep_len = rollout(
-                env, actor, store_transitions=True, max_ep_len=max_ep_len, other_actor=rl_worker
+                env, actor, store_transitions=False, max_ep_len=max_ep_len, other_actor=rl_worker, seed=seed+ep_num
             )  # NOTE: Set learn=True to update actor's buffer
             vec_return += ret_vec
             frames_collected += ep_len

@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
     if args.resume_stage2 is not None:
-        mo_mgr = MOManager(env1, 2, args.resume_stage2, device=device)
+        mo_mgr = MOManager(env1, cfg, args.resume_stage2, device=device)
         for _ in range(75):
             mo_mgr.evolve()
         print("MOManager Stage 2 run complete (resumed from checkpoint).")
@@ -85,18 +85,18 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Merge islands for potential Stage 2.
-    pop0, id0, critic0, w0 = mgr0.export_island()
-    pop1, id1, critic1, w1 = mgr1.export_island()
-
+    pop0, id0, critic0, buffer0, w0 = mgr0.export_island()
+    pop1, id1, critic1, buffer1, w1 = mgr1.export_island()
     combined_pop = pop0 + pop1
     critics_dict = {id0: critic0, id1: critic1}
     weights_by_island = {id0: w0, id1: w1}
+    buffers_by_island = {id0: buffer0, id1:buffer1}
 
     # Save the merged state for Stage 2.
     if args.save_merged is not None:
         try:
             ckpt = Checkpoint(args.save_merged)
-            ckpt.save_merged(combined_pop, critics_dict, weights_by_island, cfg, seed)
+            ckpt.save_merged(combined_pop, critics_dict, buffers_by_island, weights_by_island, cfg, seed)
             print(f"Saved merged checkpoint to: {args.save_merged}")
             print("You can now run Stage 2 directly with:")
             print(f"  python -m catserl.orchestrator.orchestrator --resume-stage2 {args.save_merged}")

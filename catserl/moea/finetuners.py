@@ -134,7 +134,8 @@ class ContinuousAWRFinetuner(Finetuner):
         device = next(child.policy.parameters()).device
 
         # --- 1. Setup ---
-        optimizer = torch.optim.Adam(child.policy.parameters(), lr=config.get("lr", 3e-4))
+        finetuner_lr = float(config.get("lr", 3e-4))
+        optimizer = torch.optim.Adam(child.policy.parameters(), finetuner_lr)
         num_epochs = config.get("epochs", 50)
         batch_size = config.get("batch_size", 256)
         beta = config.get("awr_beta", 1.0) # Temperature parameter

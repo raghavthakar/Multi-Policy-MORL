@@ -115,10 +115,10 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
-        total_timesteps = 20000
+        total_timesteps = 200000
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
-        update_every_n_steps = 50
-        updates_per_session = 50
+        update_every_n_steps = 1
+        updates_per_session = 1
 
         # --- Training Loop ---
         state, _ = self.env.reset()

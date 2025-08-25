@@ -151,10 +151,10 @@ class MOManager:
     def evolve(self, finetune_config: Optional[dict] = None):
         """Evolves the population for one generation."""
         if finetune_config is None:
-            finetune_config = {"epochs": 50, "lr": 3e-4, "batch_size": 256}
+            finetune_config = {"epochs": 50, "lr": 3e-3, "batch_size": 256}
 
         print("\n--- Starting MO Stage: Parent Selection ---")
-        eval_pop(self.population, self.env, [1 for i in range(self.num_objectives)], episodes_per_actor=50)
+        eval_pop(self.population, self.env, [1 for i in range(self.num_objectives)], episodes_per_actor=10)
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)
 

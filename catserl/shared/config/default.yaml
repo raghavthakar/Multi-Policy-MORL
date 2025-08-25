@@ -11,7 +11,7 @@ device: "cpu"           # "cpu" or "cuda"
 rl:
   hidden_dim:        128        # width of shared + stream layers
   lr:                2e-2       # Adam LR (same for all params)
-  gamma:             0.99       # discount
+  gamma:             0.9999       # discount
   tau:               0.005      # soft-update factor for target net
 
   # ε-greedy exploration schedule
@@ -21,14 +21,14 @@ rl:
 
   td3:
     critic_lr:       3e-4       # Critic learning rate
-    actor_lr:        5e-5
-    discount:        0.99       # Discount factor
+    actor_lr:        3e-4
+    discount:        0.9999     # Discount factor
     tau:             0.005      # Soft-update factor for target networks
     policy_noise:    0.2        # Noise added to target policy actions
     noise_clip:      0.5        # Clamp for the target policy noise
     policy_freq:     2          # Frequency of delayed policy updates
     exploration_noise: 0.1      # Std of Gaussian noise for exploration
-    start_timesteps: 15000      # Number of steps for random action exploration
+    start_timesteps: 10000      # Number of steps for random action exploration
     buffer_size:     1_000_000  # main ReplayBuffer capacity
     batch_size:      256
 

@@ -1,63 +1,57 @@
 # -------------------------------------------------------------------
-#  CATSERL – minimal config for DQN + buffers
+#  CATSERL – Default Configuration
 # -------------------------------------------------------------------
 
-seed: 42                 # global RNG seed
-device: "cpu"           # "cpu" or "cuda"
+seed: 42                 # Global RNG seed
+device: "cpu"            # "cpu" or "cuda"
 
 # -------------------------------------------------
-#  RL configs
+#  RL (Island Stage)
 # -------------------------------------------------
 rl:
-  hidden_dim:        128        # width of shared + stream layers
-  lr:                2e-2       # Adam LR (same for all params)
-  gamma:             0.9999       # discount
-  tau:               0.005      # soft-update factor for target net
-
-  # ε-greedy exploration schedule
-  eps_start:         1.0
-  eps_end:           0.01
-  eps_decay_frames:  100_000
+  hidden_dim:        256
+  gamma:             0.99
+  tau:               0.005
 
   td3:
-    critic_lr:       3e-4       # Critic learning rate
+    critic_lr:       3e-4
     actor_lr:        3e-4
-    discount:        0.9999     # Discount factor
-    tau:             0.005      # Soft-update factor for target networks
-    policy_noise:    0.2        # Noise added to target policy actions
-    noise_clip:      0.5        # Clamp for the target policy noise
-    policy_freq:     2          # Frequency of delayed policy updates
-    exploration_noise: 0.1      # Std of Gaussian noise for exploration
-    start_timesteps: 10000      # Number of steps for random action exploration
-    buffer_size:     1_000_000  # main ReplayBuffer capacity
+    discount:        0.99
+    policy_noise:    0.2
+    noise_clip:      0.5
+    policy_freq:     2
+    exploration_noise: 0.1
+    start_timesteps: 10000
+    buffer_size:     1_000_000
     batch_size:      256
 
 # -------------------------------------------------
-# PDERL parameters   (pderl/)
-pderl:
-  pop_size:          0         # subpopulation size of each pderl island
-  migrate_every_gens:  15     # copy RL actor into EA population every X generations
-  bc_epochs:    1
-  bc_batch:     256
-  crossover_lr: 1e-3
-
+#  MO-PDERL (Multi-Objective Stage)
 # -------------------------------------------------
-# MOPDERL parameters   (pderl/)
 mopderl:
-  episodes_per_actor: 5   # (example value, set as appropriate)
+  # Evaluation settings for actors in the population
+  episodes_per_actor: 10
 
+  # Settings for creating the child's static offline dataset
+  child_buffer_size: 50_000
+
+  # Hyperparameters for the AWR fine-tuning process
+  finetune:
+    epochs:          50
+    lr:              3e-4
+    batch_size:      256
+    awr_beta:        1.0      # Temperature for continuous AWR
+    awr_clip:        20.0     # Max value for AWR weights
 
 # -------------------------------------------------
-#  Buffers for genetic actors (data/buffers.py)
+#  Buffers for Genetic Actors
 # -------------------------------------------------
-mini_buffer_size: 8192          # per-genome circular buffer length
+mini_buffer_size: 50_000
 
 # -------------------------------------------------
 #  Environment wrapper (envs/four_rooms.py)
 #  — only the bits needed to compute rewards here —
 # -------------------------------------------------
 env:
-  name: "four-room-v0"
-  num_objectives: 3             # m  (set by your research task)
-  beta_novelty: 0.05             # intrinsic-reward scale
+  num_objectives: 2            # m  (depends on env)
   max_ep_len: -1               # max episode length, -1 for no limit

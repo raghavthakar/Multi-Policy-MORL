@@ -9,6 +9,7 @@ import gymnasium as gym
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
+from catserl.shared.evo_utils import eval_pop
 
 
 class IslandManager:
@@ -76,13 +77,7 @@ class IslandManager:
                                cfg["rl"],
                                device)
 
-        self.pop = [actors.Actor(self.rl_alg_name,
-                                 self.island_id,
-                                 self.env.observation_space.shape,
-                                 self.action_type,
-                                 self.action_dim,
-                                 buffer_size=cfg["mini_buffer_size"],
-                                 device=device) for _ in range(cfg["pderl"]["pop_size"])]
+        self.pop = []
 
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
         self.gen_counter = 0
@@ -218,4 +213,6 @@ class IslandManager:
         """
         self._eval_policy()
         self.pop.append(self._make_rl_actor())
+        eval_env = mo_gym.make('mo-swimmer-v5')
+        eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

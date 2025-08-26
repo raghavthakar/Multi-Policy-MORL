@@ -73,21 +73,16 @@ class ContinuousPolicy(nn.Module):
         
     def export_params(self) -> tuple[torch.Tensor, int]:
         """
-        Flattens and returns all network parameters and the hidden dimension size.
-        This is useful for creating a 'genome' for evolutionary algorithms.
+        Flattens and returns all network parameters using a generic, robust method.
+        This is the symmetrical counterpart to the Actor's load_flat_params.
         """
         with torch.no_grad():
-            # --- MODIFIED: Include self.log_std in the flattened parameters ---
-            # This ensures that all parameters of the model are correctly exported.
+            # Use the generic .parameters() iterator to guarantee symmetry.
+            # This automatically includes all layers and parameters like self.log_std.
             flat_params = torch.cat([
-                self.l1.weight.flatten(),
-                self.l1.bias,
-                self.l2.weight.flatten(),
-                self.l2.bias,
-                self.l3.weight.flatten(),
-                self.l3.bias,
-                self.log_std.flatten(), # Add the missing parameter
+                p.data.view(-1) for p in self.parameters()
             ]).cpu().clone()
 
+        # The hidden dimension can be retrieved directly from the first layer.
         hidden_dim = self.l1.out_features
         return flat_params, hidden_dim

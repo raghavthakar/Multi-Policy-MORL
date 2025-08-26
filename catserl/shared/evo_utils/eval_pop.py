@@ -56,3 +56,4 @@ def eval_pop(pop: List[Actor],
             frames_collected += ep_len
 
         actor.vector_return = vec_return / episodes_per_actor
+        print("Deterministic performance: ", actor.vector_return)

@@ -65,5 +65,4 @@ def deterministic_rollout(env, actor, store_transitions: bool = True, max_ep_len
         if max_ep_len > 0 and ep_len >= max_ep_len:
             trunc = True
             
-    print(ep_len)
     return ret_vec, ep_len

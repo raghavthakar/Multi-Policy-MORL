@@ -7,7 +7,7 @@ import mo_gymnasium as mo_gym
 import gymnasium as gym
 
 from catserl.shared.rl import RLWorker
-from catserl.shared.rollout import rollout
+from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
 
 
@@ -95,6 +95,20 @@ class IslandManager:
 
         # Migration log for RL→GA events
         self.migration_log = []
+    
+    # ---------- get a deterministic evaluation of the policy -----------
+    def _eval_policy(self, episodes_per_actor=10):
+        vec_return = np.zeros_like(self.w, dtype=np.float32)
+        seed = 42 # NOTE: Temporary
+        eval_env = mo_gym.make('mo-swimmer-v5')
+        for ep_num in range(episodes_per_actor):
+            ret_vec, ep_len = deterministic_rollout(
+                eval_env, self.worker, store_transitions=False, max_ep_len=self.max_ep_len, other_actor=None, seed=seed+ep_num
+            )  # NOTE: Set learn=True to update actor's buffer
+            vec_return += ret_vec
+
+        vec_return = vec_return / episodes_per_actor
+        print("Evlauated returns: ", vec_return)
 
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
@@ -116,7 +130,7 @@ class IslandManager:
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
         total_timesteps = 200000
-        total_timesteps = 15000 #NOTE: Temporary limiting for testing
+        total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 1
         updates_per_session = 1
@@ -126,10 +140,13 @@ class IslandManager:
         ep_return_vec = None
         ep_len = 0
         episodes_completed = 0
+        random_action = True
 
         for t in range(total_timesteps):
+            if t >= start_timesteps:
+                random_action = False
             # Select action: random for the start period, otherwise from the policy
-            action = self.worker.act(state)
+            action = self.worker.act(state, random_action=random_action)
 
             # Step the environment
             next_state, reward_vec, done, trunc, _ = self.env.step(action)
@@ -156,6 +173,9 @@ class IslandManager:
                 # Log episode results
                 scalar_return = (ep_return_vec * self.w).sum()
                 print(f"Total Steps: {t+1}, Episode: {episodes_completed+1}, Ep. Length: {ep_len}, Scalar Return: {scalar_return:.2f}")
+
+                if t >= start_timesteps and t % update_every_n_steps == 0:
+                    self._eval_policy()
                 
                 # Store metrics in the manager
                 self.scalar_returns.append(scalar_return)
@@ -166,7 +186,7 @@ class IslandManager:
                 ep_return_vec = None
                 ep_len = 0
                 episodes_completed += 1
-
+    
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #
     # ------------------------------------------------------------------ #
@@ -196,5 +216,6 @@ class IslandManager:
         w : np.ndarray
             The scalarising weight vector for this island.
         """
+        self._eval_policy()
         self.pop.append(self._make_rl_actor())
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

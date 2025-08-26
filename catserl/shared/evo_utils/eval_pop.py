@@ -8,7 +8,7 @@ from typing import List, Dict
 import numpy as np
 
 from catserl.shared.actors import Actor
-from catserl.shared.rollout import rollout
+from catserl.shared.rollout import deterministic_rollout
 
 
 def eval_pop(pop: List[Actor],
@@ -43,23 +43,16 @@ def eval_pop(pop: List[Actor],
         Total frames collected during evaluation.
     """
     w = weight_vector
-    fitness_vals = []
     frames_collected = 0
     seed = 42
 
     for actor in pop:
         vec_return = np.zeros_like(w, dtype=np.float32)
         for ep_num in range(episodes_per_actor):
-            ret_vec, ep_len = rollout(
+            ret_vec, ep_len = deterministic_rollout(
                 env, actor, store_transitions=False, max_ep_len=max_ep_len, other_actor=rl_worker, seed=seed+ep_num
             )  # NOTE: Set learn=True to update actor's buffer
             vec_return += ret_vec
             frames_collected += ep_len
 
         actor.vector_return = vec_return / episodes_per_actor
-        actor.fitness = float((actor.vector_return * w).sum())
-        fitness_vals.append(actor.fitness)
-
-    return dict(mean_fitness=np.mean(fitness_vals),
-                max_fitness=np.max(fitness_vals),
-                population_size=len(pop)), frames_collected

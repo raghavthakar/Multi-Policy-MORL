@@ -225,7 +225,7 @@ class DQN(Algo):
 	# ------------------------------------------------------------------
 	# Public API (satisfies Algo interface)
 	# ------------------------------------------------------------------
-	def act(self, state: np.ndarray) -> int:
+	def act(self, state: np.ndarray, **kwargs) -> int:
 		"""ε‑greedy action selection using the online network."""
 
 		self.frame_idx += 1
@@ -377,16 +377,20 @@ class TD3(Algo): # Inherit from Algo
 		self.total_it = 0 # How many updates have been made
 		self.frames_idx = 0 # How many frames have been collected
 
-	def act(self, state: np.ndarray):
+	def act(self, state: np.ndarray, noisy_action=True, random_action=False):
 		self.frames_idx += 1
 
 		# If RL has not kicked in then take a random action
-		if self.frames_idx < self.rl_kick_in_frames:
+		if random_action:
 			return np.random.uniform(-self.max_action, self.max_action, self.n_actions)
 		
 		# Step 1: Get the deterministic action from the policy
 		state_tensor = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
 		action = self.actor(state_tensor).cpu().data.numpy().flatten()
+		
+		# Deterministic action for policy evaluation.
+		if not noisy_action:
+			return action.clip(-self.max_action, self.max_action)
 
 		# Step 2: Add scaled Gaussian noise for exploration
 		noise = np.random.normal(
@@ -536,8 +540,8 @@ class RLWorker:
 	# ------------------------------------------------------------------
 	# Thin delegation layer – forwards calls to the underlying algorithm.
 	# ------------------------------------------------------------------
-	def act(self, state: np.ndarray) -> int:  # noqa: D401 – imperative mood
-		return self.agent.act(state)
+	def act(self, state: np.ndarray, noisy_action=True, random_action=False) -> int:  # noqa: D401 – imperative mood
+		return self.agent.act(state, noisy_action=noisy_action, random_action=random_action)
 
 	def remember(self, *transition) -> None:  # noqa: D401 – imperative mood
 		self.agent.remember(*transition)

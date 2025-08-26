@@ -100,16 +100,9 @@ class _TD3ActorImpl:
 		"""Returns the deterministic action from the continuous policy."""
 		state_tensor = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
 		action = self.net(state_tensor).cpu().data.numpy().flatten()
-
-		noise = np.random.normal(
-			0, 
-			self.max_action * self.exploration_noise, 
-			size=self.action_dim
-		)
-		action_with_noise = action + noise
 	
 		# Step 3: Clip the final action to ensure it's within the valid range
-		clipped_action = action_with_noise.clip(-self.max_action, self.max_action)
+		clipped_action = action.clip(-self.max_action, self.max_action)
 
 		return clipped_action
 
@@ -212,7 +205,7 @@ class Actor:
 
 
 	# --- Delegated methods ---
-	def act(self, state: np.ndarray) -> Union[int, np.ndarray]:
+	def act(self, state: np.ndarray, **kwargs) -> Union[int, np.ndarray]:
 		return self._impl.act(state)
 
 	def remember(self, *transition):

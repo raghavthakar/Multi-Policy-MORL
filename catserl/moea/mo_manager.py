@@ -8,6 +8,7 @@ import random
 from scipy.spatial.distance import pdist, squareform
 import torch
 import numpy as np
+import mo_gymnasium as mo_gym
 
 from catserl.orchestrator.checkpoint import Checkpoint
 from catserl.shared.evo_utils.eval_pop import eval_pop
@@ -181,7 +182,8 @@ class MOManager:
         """
         print("\n--- Starting MO Generation ---")
         
-        eval_pop(self.population, self.env, [1,1], episodes_per_actor=self.cfg['episodes_per_actor'])
+        eval_env = mo_gym.make('mo-swimmer-v5')
+        eval_pop(self.population, eval_env, [0.5,0.5], episodes_per_actor=self.cfg['episodes_per_actor'])
 
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)

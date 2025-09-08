@@ -124,8 +124,8 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
-        total_timesteps = 200000
-        total_timesteps = 25000 #NOTE: Temporary limiting for testing
+        total_timesteps = 3000000
+        # total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 1
         updates_per_session = 1

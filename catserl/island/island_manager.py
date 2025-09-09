@@ -10,6 +10,7 @@ from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
 from catserl.shared.evo_utils import eval_pop
+from catserl.shared import checkpoint
 
 
 class IslandManager:
@@ -27,8 +28,9 @@ class IslandManager:
                  island_id: int,
                  scalar_weight: np.ndarray,
                  cfg: Dict,
-                 seed: int,
-                 device: torch.device):
+                 checkpointer: checkpoint.Checkpoint = None,
+                 seed: int = 2024,
+                 device: torch.device = 'cpu'):
         """
         Parameters
         ----------
@@ -90,6 +92,10 @@ class IslandManager:
 
         # Migration log for RL→GA events
         self.migration_log = []
+
+        # Checkpointing variables
+        self.timesteps_between_checkpoints = 2000
+        self.checkpointer = checkpointer
     
     # ---------- get a deterministic evaluation of the policy -----------
     def _eval_policy(self, episodes_per_actor=10):
@@ -124,7 +130,7 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
-        total_timesteps = 3000000
+        total_timesteps = 11000
         # total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 1
@@ -162,6 +168,11 @@ class IslandManager:
             if t >= start_timesteps and t % update_every_n_steps == 0:
                 for _ in range(updates_per_session):
                     self.worker.update()
+            
+            # Checkpoint if it's time
+            if t > 0 and t % self.timesteps_between_checkpoints == 0 and self.checkpointer is not None:
+                pop, island_id, critic, buff, weight = self.export_island()
+                self.checkpointer.save_island(population=pop, critic=critic, buffer=buff, weights=weight, cfg=self.cfg, seed=2024, island_id=island_id)
 
             # Handle episode termination
             if done or trunc:
@@ -208,11 +219,13 @@ class IslandManager:
             The identifier for the island.
         critic : torch.nn.Module
             The critic network used by the RL worker.
+        buffer : IDK #NOTE
+            Buffer for this island.
         w : np.ndarray
             The scalarising weight vector for this island.
         """
         self._eval_policy()
         self.pop.append(self._make_rl_actor())
-        eval_env = mo_gym.make('mo-swimmer-v5')
-        eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
+        # eval_env = mo_gym.make('mo-swimmer-v5')
+        # eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

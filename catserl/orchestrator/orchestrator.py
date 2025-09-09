@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         import torch
         import mo_gymnasium as mo_gym
         from catserl.island.island_manager import IslandManager
-        from catserl.orchestrator.checkpoint import Checkpoint
+        from catserl.shared.checkpoint import Checkpoint
         from catserl.moea.mo_manager import MOManager
     except Exception as e:
         print(f"Failed to import runtime dependencies: {e}", file=sys.stderr)

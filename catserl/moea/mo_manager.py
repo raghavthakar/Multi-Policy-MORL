@@ -10,7 +10,7 @@ import torch
 import numpy as np
 import mo_gymnasium as mo_gym
 
-from catserl.orchestrator.checkpoint import Checkpoint
+from catserl.shared.checkpoint import Checkpoint
 from catserl.shared.evo_utils.eval_pop import eval_pop
 from catserl.shared.actors import Actor
 from catserl.shared.buffers import MiniBuffer, ReplayBuffer

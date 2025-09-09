@@ -172,7 +172,14 @@ class IslandManager:
             # Checkpoint if it's time
             if t > 0 and t % self.timesteps_between_checkpoints == 0 and self.checkpointer is not None:
                 pop, island_id, critic, buff, weight = self.export_island()
-                self.checkpointer.save_island(population=pop, critic=critic, buffer=buff, weights=weight, cfg=self.cfg, seed=2024, island_id=island_id)
+                self.checkpointer.save_island(population=pop, 
+                                              critic=critic, 
+                                              buffer=buff, 
+                                              weights=weight, 
+                                              cfg=self.cfg, 
+                                              seed=2024, 
+                                              island_id=island_id, 
+                                              timestep=t)
 
             # Handle episode termination
             if done or trunc:

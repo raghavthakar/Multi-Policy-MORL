@@ -29,6 +29,7 @@ class Checkpoint:
         cfg: Dict[str, Any],
         seed: int,
         island_id: int,
+        timestep: int = 0
     ) -> None:
         """
         Save the checkpoint for a single island so training can be resumed later.
@@ -108,7 +109,7 @@ class Checkpoint:
         }
 
         # Write atomically to an island-specific file
-        island_file = self.path / f"island_{island_id}.dat"
+        island_file = self.path / f"island_{island_id}_t{timestep}.dat"
         tmp_path = island_file.with_suffix(island_file.suffix + ".tmp")
         torch.save(payload, tmp_path)
         tmp_path.replace(island_file)

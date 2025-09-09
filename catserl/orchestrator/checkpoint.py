@@ -13,10 +13,11 @@ class Checkpoint:
     """Handles saving and loading the merged population and critics for Stage 2."""
 
     VERSION = 1
+    FILENAME = 'merged_populations.dat'
 
     def __init__(self, path: Path | str):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.file_path = self.path / self.FILENAME    # actual checkpoint file
 
     @torch.no_grad()
     def save_merged(
@@ -29,6 +30,10 @@ class Checkpoint:
         seed: int,
     ) -> None:
         """Saves the necessary components to a single file."""
+        # Create the save data directory if it does not exist
+        if not self.path.exists():
+            self.path.mkdir(parents=True, exist_ok=True)
+
         actors_blob = []
         for actor in population:
             actors_blob.append({
@@ -84,20 +89,17 @@ class Checkpoint:
             "island_buffers": buffers_blob,
         }
 
-        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp_path = self.file_path.with_suffix(self.file_path.suffix + ".tmp")
         torch.save(payload, tmp_path)
-        tmp_path.replace(self.path)
+        tmp_path.replace(self.file_path)
 
     @torch.no_grad()
-    def load_merged(self, device: torch.device | str = "cpu", path: Path | str = None):
+    def load_merged(self, device: torch.device | str = "cpu"):
         """Loads and reconstructs the population, critics, and island buffers."""
-        if path:
-            self.path = Path(path)
-        
-        if not self.path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {self.path}")
+        if not self.file_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {self.file_path}")
 
-        payload = torch.load(self.path, map_location="cpu", weights_only=False)
+        payload = torch.load(self.file_path, map_location="cpu", weights_only=False)
 
         if payload.get("version") != self.VERSION:
             raise RuntimeError(f"Checkpoint version mismatch: expected {self.VERSION}")

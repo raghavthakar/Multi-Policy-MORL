@@ -13,8 +13,8 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "shared" / "config" / 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CATSERL Orchestrator", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML config file.")
-    parser.add_argument("--save-merged", type=Path, default=None, help="If set, save merged islands (population + critics) to this checkpoint file at the end of island training.")
-    parser.add_argument("--resume-stage2", type=Path, default=None, help="If set, skip island training and load a merged checkpoint (created by --save-merged) to start Stage 2.")
+    parser.add_argument("--save-data-dir", type=Path, default=None, help="If set, save checkpoint files to this folder.")
+    parser.add_argument("--resume-stage2", action='store_true', default=False, help="If set, skip island training and load a merged checkpoint (from --save-data-dir) to start Stage 2.")
 
     args = parser.parse_args(argv)
 
@@ -63,8 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     torch.backends.cudnn.benchmark = False
 
     # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
-    if args.resume_stage2 is not None:
-        mo_mgr = MOManager(env1, cfg, args.resume_stage2, device=device)
+    if args.resume_stage2:
+        mo_mgr = MOManager(env1, cfg, args.save_data_dir, device=device)
         for _ in range(75):
             mo_mgr.evolve()
         print("MOManager Stage 2 run complete (resumed from checkpoint).")
@@ -93,11 +93,11 @@ def main(argv: list[str] | None = None) -> int:
     buffers_by_island = {id0: buffer0, id1:buffer1}
 
     # Save the merged state for Stage 2.
-    if args.save_merged is not None:
+    if args.save_data_dir is not None:
         try:
-            ckpt = Checkpoint(args.save_merged)
+            ckpt = Checkpoint(args.save_data_dir)
             ckpt.save_merged(combined_pop, critics_dict, buffers_by_island, weights_by_island, cfg, seed)
-            print(f"Saved merged checkpoint to: {args.save_merged}")
+            print(f"Saved merged checkpoint to: {args.save_data_dir}")
             print("You can now run Stage 2 directly with:")
             print(f"  python -m catserl.orchestrator.orchestrator --resume-stage2 {args.save_merged}")
         except Exception as e:

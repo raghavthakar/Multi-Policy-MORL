@@ -94,7 +94,7 @@ class IslandManager:
         self.migration_log = []
 
         # Checkpointing variables
-        self.timesteps_between_checkpoints = 2000
+        self.timesteps_between_checkpoints = 25000
         self.checkpointer = checkpointer
     
     # ---------- get a deterministic evaluation of the policy -----------
@@ -130,7 +130,7 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def train(self) -> Dict:
         # --- Training Hyperparameters ---
-        total_timesteps = 11000
+        total_timesteps = 750000
         # total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
         update_every_n_steps = 1
@@ -153,7 +153,7 @@ class IslandManager:
             next_state, reward_vec, done, trunc, _ = self.env.step(action)
             
             # Store the transition in the agent's buffer
-            self.worker.remember(state, action, reward_vec, next_state, done)
+            self.worker.remember(state, action, reward_vec, next_state, done or trunc)
 
             # Accumulate episode rewards
             if ep_return_vec is None:
@@ -232,7 +232,7 @@ class IslandManager:
             The scalarising weight vector for this island.
         """
         self._eval_policy()
-        self.pop.append(self._make_rl_actor())
+        self.pop.append(self._make_rl_actor()) #NOTE: Population thus tracks the rl policy over each checkpoint call 
         # eval_env = mo_gym.make('mo-swimmer-v5')
         # eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

@@ -55,9 +55,9 @@ def deterministic_rollout(env, actor, store_transitions: bool = True, max_ep_len
             ret_vec += r_vec
 
         if store_transitions and hasattr(actor, "remember"):
-            actor.remember(s, a, r_vec, s2, done)
+            actor.remember(s, a, r_vec, s2, done or trunc)
             if other_actor is not None and hasattr(other_actor, "remember"):
-                other_actor.remember(s, a, r_vec, s2, done)
+                other_actor.remember(s, a, r_vec, s2, done or trunc)
 
         s = s2
         ep_len += 1

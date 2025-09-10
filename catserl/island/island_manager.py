@@ -85,6 +85,10 @@ class IslandManager:
         self.gen_counter = 0
         self.migrate_every = int(cfg["pderl"].get("migrate_every_gens", 5))
 
+        # Update frequency
+        self.update_every_n_steps = cfg['rl']['td3']['update_every_n_steps']
+        self.updates_per_session = cfg['rl']['td3']['updates_per_session']
+
         # Stats
         self.scalar_returns: List[float] = []
         self.vector_returns: List[np.ndarray] = []
@@ -133,8 +137,6 @@ class IslandManager:
         total_timesteps = 750000
         # total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
-        update_every_n_steps = 1
-        updates_per_session = 1
 
         # --- Training Loop ---
         state, _ = self.env.reset()
@@ -165,8 +167,8 @@ class IslandManager:
             ep_len += 1
 
             # Perform learning updates
-            if t >= start_timesteps and t % update_every_n_steps == 0:
-                for _ in range(updates_per_session):
+            if t >= start_timesteps and t % self.update_every_n_steps == 0:
+                for _ in range(self.updates_per_session):
                     self.worker.update()
             
             # Checkpoint if it's time
@@ -187,7 +189,7 @@ class IslandManager:
                 scalar_return = (ep_return_vec * self.w).sum()
                 print(f"Total Steps: {t+1}, Episode: {episodes_completed+1}, Ep. Length: {ep_len}, Scalar Return: {scalar_return:.2f}")
 
-                if t >= start_timesteps and t % update_every_n_steps == 0:
+                if t >= start_timesteps and t % self.update_every_n_steps == 0:
                     self._eval_policy()
                 
                 # Store metrics in the manager

@@ -49,8 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 2024))
     device = torch.device(cfg.get("device", "cpu"))
 
-    env1 = mo_gym.make("mo-swimmer-v5")
-    env2 = mo_gym.make("mo-swimmer-v5")
+    env1 = mo_gym.make(cfg['env']['name'])
+    env2 = mo_gym.make(cfg['env']['name'])
 
     # Seeding
     random.seed(seed)

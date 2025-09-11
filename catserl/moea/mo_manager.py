@@ -51,6 +51,7 @@ class MOManager:
         self.device = torch.device(device)
         self.cfg = cfg['mopderl']  # Store the relevant config section
         self.num_objectives = cfg['env']['num_objectives']
+        self.glob_cfg = cfg
         
         # Load all components from the end of the island stage
         print(f"[MOManager] Loading merged checkpoint from: {ckpt_path}")
@@ -182,7 +183,7 @@ class MOManager:
         """
         print("\n--- Starting MO Generation ---")
         
-        eval_env = mo_gym.make('mo-swimmer-v5')
+        eval_env = mo_gym.make(self.glob_cfg['env']['name'])
         eval_pop(self.population, eval_env, [0.5,0.5], episodes_per_actor=self.cfg['episodes_per_actor'])
 
         self.generation += 1

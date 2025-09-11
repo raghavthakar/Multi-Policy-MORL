@@ -54,6 +54,7 @@ class IslandManager:
         self.rl_alg_name = 'td3'
         # -------------------------------------------------------------- #
         # local deterministic RNG for this island
+        self.seed = seed
         self.rs = np.random.RandomState(seed)
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
@@ -104,11 +105,10 @@ class IslandManager:
     # ---------- get a deterministic evaluation of the policy -----------
     def _eval_policy(self, episodes_per_actor=10):
         vec_return = np.zeros_like(self.w, dtype=np.float32)
-        seed = 42 # NOTE: Temporary
         eval_env = mo_gym.make('mo-swimmer-v5')
         for ep_num in range(episodes_per_actor):
             ret_vec, ep_len = deterministic_rollout(
-                eval_env, self.worker, store_transitions=False, max_ep_len=self.max_ep_len, other_actor=None, seed=seed+ep_num
+                eval_env, self.worker, store_transitions=False, max_ep_len=self.max_ep_len, other_actor=None, seed=self.seed+ep_num
             )  # NOTE: Set learn=True to update actor's buffer
             vec_return += ret_vec
 
@@ -179,7 +179,7 @@ class IslandManager:
                                               buffer=buff, 
                                               weights=weight, 
                                               cfg=self.cfg, 
-                                              seed=2024, 
+                                              seed=self.seed, 
                                               island_id=island_id, 
                                               timestep=t)
 

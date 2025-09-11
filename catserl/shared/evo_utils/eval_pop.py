@@ -16,7 +16,8 @@ def eval_pop(pop: List[Actor],
                 weight_vector: np.ndarray,
                 episodes_per_actor: int = 1,
                 max_ep_len: int = -1,
-                rl_worker=None) -> Dict:
+                rl_worker=None,
+                seed: int = 2024) -> Dict:
     """
     Returns simple stats; population's fitnesses are modified in-place.
 
@@ -34,6 +35,8 @@ def eval_pop(pop: List[Actor],
         Maximum episode length (default: -1, meaning no limit).
     rl_worker : RLWorker, optional
         If provided, will be supplied as 'other_actor' to rollout so it can observe transitions (default: None).
+    seed: int, optional
+        Starting seed (default: 2024)
 
     Returns
     -------
@@ -44,7 +47,6 @@ def eval_pop(pop: List[Actor],
     """
     w = weight_vector
     frames_collected = 0
-    seed = 42
 
     for actor in pop:
         vec_return = np.zeros_like(w, dtype=np.float32)

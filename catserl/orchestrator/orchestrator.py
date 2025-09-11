@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Failed to import runtime dependencies: {e}", file=sys.stderr)
         return 2
 
-    seed = int(cfg.get("seed", 42))
+    seed = int(cfg.get("seed", 2024))
     device = torch.device(cfg.get("device", "cpu"))
 
     env1 = mo_gym.make("mo-swimmer-v5")

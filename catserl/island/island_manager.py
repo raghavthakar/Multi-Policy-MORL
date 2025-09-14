@@ -82,26 +82,50 @@ class IslandManager:
 
         self.pop = []
 
-        self.total_timesteps = cfg['rl']['td3']['total_timesteps']
+        self.total_timesteps = cfg['rl']['total_timesteps']
+        self.trained_timesteps = 0
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
-        self.gen_counter = 0
-        self.migrate_every = int(cfg["pderl"].get("migrate_every_gens", 5))
 
         # Update frequency
-        self.update_every_n_steps = cfg['rl']['td3']['update_every_n_steps']
-        self.updates_per_session = cfg['rl']['td3']['updates_per_session']
+        self.update_every_n_steps = cfg['rl']['update_every_n_steps']
+        self.updates_per_session = cfg['rl']['updates_per_session']
 
         # Stats
         self.scalar_returns: List[float] = []
         self.vector_returns: List[np.ndarray] = []
         self.frames_collected = 0
 
-        # Migration log for RL→GA events
-        self.migration_log = []
-
         # Checkpointing variables
         self.timesteps_between_checkpoints = 25000
         self.checkpointer = checkpointer
+
+        # Track training variables
+        self._training_stats = self.TrainingStats()
+    
+    class TrainingStats:
+        "Persistent training variables that allow control to pop in and out of the train() method."
+        def __init__(self):
+            self.state = None
+            self.ep_return_vec = None
+            self.ep_len = 0
+            self.episodes_completed = 0
+            self.random_action = True
+        
+        def get(self):
+            return (
+                self.state,
+                self.ep_return_vec,
+                self.ep_len,
+                self.episodes_completed,
+                self.random_action,
+            )
+        
+        def set(self, state, ep_return_vec, ep_len, episodes_completed, random_action):
+            self.state = state
+            self.ep_return_vec = ep_return_vec
+            self.ep_len = ep_len
+            self.episodes_completed = episodes_completed
+            self.random_action = random_action
     
     # ---------- get a deterministic evaluation of the policy -----------
     def _eval_policy(self, episodes_per_actor=10):
@@ -133,23 +157,24 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     # ----------  Warm-up ---------------------------------------------- #
     # ------------------------------------------------------------------ #
-    def train(self) -> Dict:
+    def train(self, steps_to_train=1000) -> Dict:
         # --- Training Hyperparameters ---
         total_timesteps = self.total_timesteps
         # total_timesteps = 25000 #NOTE: Temporary limiting for testing
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
 
-        # --- Training Loop ---
-        state, _ = self.env.reset()
-        ep_return_vec = None
-        ep_len = 0
-        episodes_completed = 0
-        random_action = True
+        # Initalise the persistent variables (and reset the environement the first time)
+        if self.trained_timesteps == 0:
+            self._training_stats.set(self.env.reset()[0], None, 0, 0, True)
 
-        for t in range(total_timesteps):
+        # --- Training Loop ---
+        for t in range(self.trained_timesteps, self.trained_timesteps+steps_to_train):
+            # Init local variables
+            state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
+            
+            # Select action: random for the start period, otherwise from the policy
             if t >= start_timesteps:
                 random_action = False
-            # Select action: random for the start period, otherwise from the policy
             action = self.worker.act(state, random_action=random_action)
 
             # Step the environment
@@ -202,7 +227,15 @@ class IslandManager:
                 ep_return_vec = None
                 ep_len = 0
                 episodes_completed += 1
-    
+            
+            # Update persistent variables
+            self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
+
+            # Update the trained timesteps tracker
+            self.trained_timesteps += 1
+        
+        return self.trained_timesteps
+
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #
     # ------------------------------------------------------------------ #

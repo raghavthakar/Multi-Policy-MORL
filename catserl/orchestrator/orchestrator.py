@@ -67,49 +67,49 @@ def main(argv: list[str] | None = None) -> int:
     if args.save_data_dir is not None:
         ckpt = Checkpoint(args.save_data_dir)
 
-    # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
-    if args.resume_stage2:
-        mo_mgr = MOManager(env1, cfg, args.save_data_dir, device=device)
-        for _ in range(75):
-            mo_mgr.evolve()
-        print("MOManager Stage 2 run complete (resumed from checkpoint).")
-        return 0
-    
     # ---------- Stage 1 (islands) ----------
-    # Two islands with different objective weights.
-    mgr0 = IslandManager(env1, 1, np.array([1, 0]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
-    mgr1 = IslandManager(env2, 2, np.array([0, 1]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
+    if not args.resume_stage2:
+        # Must first train objective experts on islands.
+        # Two islands with different objective weights.
+        mgr0 = IslandManager(env1, 1, np.array([1, 0]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
+        mgr1 = IslandManager(env2, 2, np.array([0, 1]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
 
-    mgr0.train()
-    mgr1.train()
-    print(
-        f"Obj-0 10-ep mean: {np.mean(mgr0.get_scalar_returns()[-10:]):.2f} "
-        f"Obj-0 10-ep mean: {np.mean(mgr0.get_vector_returns()[-10:], axis=0)} "
-        f"| Obj-1 10-ep mean: {np.mean(mgr1.get_scalar_returns()[-10:]):.2f}"
-        f"Obj-0 10-ep mean: {np.mean(mgr1.get_vector_returns()[-10:], axis=0)} "
-    )
+        t = [0, 0] # track the trained timeseteps on each objective
+        total_timesteps = cfg['rl']['total_timesteps']
+        while sum(t) < total_timesteps:
+            t = [mgr0.train(1000), mgr1.train(1000)]
+            
 
-    # Save the merged state for Stage 2.
-    if args.save_data_dir is not None:
-        try:
-            # Merge islands for potential Stage 2.
-            pop0, id0, critic0, buffer0, w0 = mgr0.export_island()
-            pop1, id1, critic1, buffer1, w1 = mgr1.export_island()
-            combined_pop = pop0 + pop1
-            critics_dict = {id0: critic0, id1: critic1}
-            weights_by_island = {id0: w0, id1: w1}
-            buffers_by_island = {id0: buffer0, id1:buffer1}
+        # Save the merged state for Stage 2.
+        if args.save_data_dir is not None:
+            try:
+                # Merge islands for potential Stage 2.
+                pop0, id0, critic0, buffer0, w0 = mgr0.export_island()
+                pop1, id1, critic1, buffer1, w1 = mgr1.export_island()
+                combined_pop = pop0 + pop1
+                critics_dict = {id0: critic0, id1: critic1}
+                weights_by_island = {id0: w0, id1: w1}
+                buffers_by_island = {id0: buffer0, id1:buffer1}
 
-            ckpt.save_merged(combined_pop, critics_dict, buffers_by_island, weights_by_island, cfg, seed)
-            print(f"Saved merged checkpoint to: {args.save_data_dir}")
-            print("You can now run Stage 2 directly with:")
-            print(f"  python -m catserl.orchestrator.orchestrator --resume-stage2 {args.save_data_dir}")
-        except Exception as e:
-            print(f"WARNING: Failed to save merged checkpoint: {e}", file=sys.stderr)
+                ckpt.save_merged(combined_pop, critics_dict, buffers_by_island, weights_by_island, cfg, seed)
+                print(f"Saved merged checkpoint to: {args.save_data_dir}")
+                print("You can now run Stage 2 directly with:")
+                print(f"  python -m catserl.orchestrator.orchestrator --resume-stage2 {args.save_data_dir}")
+            except Exception as e:
+                print(f"WARNING: Failed to save merged checkpoint: {e}", file=sys.stderr)
 
-    print("Stage 1 complete; merged population prepared.")
-    return 0
+        print("Stage 1 complete; merged population prepared.")
+        return 0
 
+    # ---------- Stage 2 (Expert crossover) ----------
+    else:
+        # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
+        if args.resume_stage2:
+            mo_mgr = MOManager(env1, cfg, args.save_data_dir, device=device)
+            for _ in range(75):
+                mo_mgr.evolve()
+            print("MOManager Stage 2 run complete (resumed from checkpoint).")
+            return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

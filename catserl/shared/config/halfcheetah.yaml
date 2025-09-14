@@ -1,5 +1,5 @@
 # -------------------------------------------------------------------
-#  CATSERL – Default Configuration
+#  CATSERL
 # -------------------------------------------------------------------
 
 seed: 2024                 # Global RNG seed
@@ -15,6 +15,10 @@ rl:
   hidden_dim:        256
   gamma:             0.99
   tau:               0.005
+  update_every_n_steps: 1
+  updates_per_session: 1
+  total_timesteps: 4_000_000
+  start_timesteps: 60_000
 
   td3:
     critic_lr:       3e-4
@@ -24,12 +28,8 @@ rl:
     noise_clip:      0.5
     policy_freq:     2
     exploration_noise: 0.1
-    start_timesteps: 25000
     buffer_size:     1_000_000
     batch_size:      256
-    update_every_n_steps: 1
-    updates_per_session: 1
-    total_timesteps: 4_000_000
 
 # -------------------------------------------------
 #  MO-PDERL (Multi-Objective Stage)

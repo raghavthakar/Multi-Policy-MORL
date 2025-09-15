@@ -40,6 +40,8 @@ class Finetuner(ABC):
         # --- MODIFIED: Add TD3 strategy ---
         elif strategy_name == 'td3':
             return ContinuousAWRFinetuner()
+        elif strategy_name == 'weightedmse':
+            return ContinuousWeightedMSEFinetuner()
         else:
             raise ValueError(f"Unknown finetuning strategy for RL algorithm: {strategy_name}")
 
@@ -199,4 +201,134 @@ class ContinuousAWRFinetuner(Finetuner):
             avg_loss = total_loss / len(dataloader)
             if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
                  print(f"  [Epoch {epoch + 1}/{num_epochs}] Avg AWR Loss: {avg_loss:.4f}")
+        child.policy.eval()
+
+# --- NEW: Deterministic-friendly, Advantage-Weighted MSE Finetuner for TD3 ---
+class ContinuousWeightedMSEFinetuner(Finetuner):
+    """
+    Fine-tunes a continuous (deterministic) policy using an AWR-style
+    advantage weighting but a weighted-MSE regression objective instead of
+    log-probabilities. This is compatible with TD3-style critics and your
+    current deterministic ContinuousPolicy.
+
+    Key details:
+      - Uses hybrid advantages built from *per-objective* critics.
+      - Uses min over twin Q-heads when available (TD3 consistency).
+      - Normalises advantages per-objective (z-score or minmax).
+      - Converts A into weights via exp(A/beta) with numerically stable centering.
+      - Optimises a weighted MSE: ||mu(s) - a||^2 scaled by those weights.
+
+    Expected critic API:
+      - Prefer critic.Q1(s,a), critic.Q2(s,a)
+      - Fallback: critic(s,a) -> (q1, q2) or a single q
+    """
+
+    def execute(
+        self,
+        child: Actor,
+        target_scalarisation: np.ndarray,
+        critics: Dict[int, torch.nn.Module],
+        config: Dict
+    ) -> None:
+        device = next(child.policy.parameters()).device
+
+        # --- 1) Hyperparameters / config ---
+        lr          = float(config.get("lr", 3e-4))
+        num_epochs  = int(config.get("epochs", 50))
+        batch_size  = int(config.get("batch_size", 256))
+        beta        = float(config.get("awr_beta", 1.0))          # temperature
+        awr_clip    = float(config.get("awr_clip", 20.0))         # weight clipping
+        sigma2      = float(config.get("implicit_gaussian_var", 1.0))  # implicit variance for MSE~NLL
+        adv_norm    = str(config.get("adv_norm", "zscore")).lower()    # "zscore" | "minmax" | "none"
+
+        if len(child.buffer) < batch_size:
+            print("[ContinuousWeightedMSEFinetuner] Child buffer too small for a full batch. Skipping.")
+            return
+
+        optimizer = torch.optim.Adam(child.policy.parameters(), lr=lr)
+
+        critic_ids = sorted(critics.keys())
+        w = torch.from_numpy(target_scalarisation).float().to(device).unsqueeze(1)
+
+        # --- 2) Fetch full static dataset once ---
+        all_s, all_a, _, _, _ = child.buffer.sample(len(child.buffer), device=device)
+
+        # Optional: one-time dataset shuffle to avoid block ordering by source
+        perm = torch.randperm(all_s.shape[0], device=device)
+        all_s, all_a = all_s[perm], all_a[perm]
+
+        # --- Helpers for TD3 twin-critic min and hybrid advantage ---
+        @torch.no_grad()
+        def _min_q(critic, s, a):
+            """Return min over twin Q-heads."""
+            out = critic(s, a)
+            q1, q2 = out[0], out[1]
+            return torch.min(q1, q2).squeeze(-1)
+
+        @torch.no_grad()
+        def _compute_hybrid_advantages():
+            per_obj_advs = []
+            mu_all = child.policy(all_s)  # deterministic policy output (mu(s))
+            for cid in critic_ids:
+                critic = critics[cid]
+                critic.eval()
+
+                q_sa = _min_q(critic, all_s, all_a)      # Q(s, a)
+                v_s  = _min_q(critic, all_s, mu_all)     # V(s) ≈ Q(s, mu(s))
+                adv_i = q_sa - v_s                       # A_i(s,a)
+                per_obj_advs.append(adv_i)
+
+            advs = torch.stack(per_obj_advs, dim=0)  # [num_obj, N]
+
+            # Per-objective normalisation to align scales
+            if adv_norm == "zscore":
+                mu  = advs.mean(dim=1, keepdim=True)
+                std = advs.std(dim=1, keepdim=True).clamp_min(1e-6)
+                norm_advs = (advs - mu) / std
+            elif adv_norm == "minmax":
+                mins = advs.min(dim=1, keepdim=True).values
+                maxs = advs.max(dim=1, keepdim=True).values
+                norm_advs = (advs - mins) / (maxs - mins).clamp_min(1e-8)
+            else:  # "none"
+                norm_advs = advs
+
+            # Hybrid advantage: weighted sum across objectives
+            hybrid_adv = torch.sum(norm_advs * w, dim=0)  # [N]
+            return hybrid_adv
+
+        with torch.no_grad():
+            hybrid_advantages = _compute_hybrid_advantages()
+
+        dataset = TensorDataset(all_s, all_a, hybrid_advantages)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+        # --- 3) Weighted-MSE training loop ---
+        child.policy.train()
+        print(f"[ContinuousWeightedMSEFinetuner] Starting WMSE fine-tuning for {num_epochs} epochs "
+              f"(beta={beta}, clip={awr_clip}, norm={adv_norm}, sigma2={sigma2})...")
+
+        for epoch in range(num_epochs):
+            total_loss = 0.0
+            for s_batch, a_batch, adv_batch in dataloader:
+                # Numerically-stable AWR weights: exp( (A / beta) - max )
+                x = adv_batch / beta
+                x = x - x.max().detach()
+                awr_weights = torch.exp(x).clamp(max=awr_clip)  # [B]
+
+                mu = child.policy(s_batch)                      # [B, act_dim]
+                sq_err = ((mu - a_batch) ** 2).sum(dim=1)       # [B]
+                # Gaussian NLL up to constant factor -> (1 / (2*sigma^2)) * ||a - mu||^2
+                loss = (awr_weights * (sq_err / (2.0 * sigma2))).mean()
+
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(child.policy.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                total_loss += float(loss.item())
+
+            avg_loss = total_loss / max(1, len(dataloader))
+            if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
+                print(f"  [Epoch {epoch + 1}/{num_epochs}] Avg WMSE Loss: {avg_loss:.4f}")
+
         child.policy.eval()

@@ -67,7 +67,7 @@ class MOManager:
 
         # Configure the manager based on the loaded actor type (e.g., 'td3')
         self.rl_alg = self.population[0].kind
-        self.finetuner = Finetuner.create(self.rl_alg)
+        self.finetuner = Finetuner.create('weightedmse')
 
         print(f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics, "
               f"and {len(self.specialist_buffers)} specialist buffers.")
@@ -122,6 +122,10 @@ class MOManager:
         # 1. Initialize child policy by cloning a random parent's network
         template_parent = random.choice([parent_a, parent_b])
         child = template_parent.clone()
+        # flat params
+        flatA = parent_a.flat_params()
+        flatB = parent_b.flat_params()
+        child.load_flat_params(0.5 * (flatA + flatB))
         child.pop_id = uuid.uuid4().hex[:8]
 
         # 2. Determine sampling ratios from the target weights

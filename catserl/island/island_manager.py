@@ -173,7 +173,7 @@ class IslandManager:
             state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
             
             # Select action: random for the start period, otherwise from the policy
-            if t >= start_timesteps:
+            if self.trained_timesteps >= start_timesteps:
                 random_action = False
             action = self.worker.act(state, random_action=random_action)
 

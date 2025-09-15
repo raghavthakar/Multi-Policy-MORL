@@ -17,8 +17,8 @@ rl:
   tau:               0.005
   update_every_n_steps: 1
   updates_per_session: 1
-  total_timesteps: 4_000_000
-  start_timesteps: 60_000
+  total_timesteps: 60_000
+  start_timesteps: 25_000
 
   td3:
     critic_lr:       3e-4

@@ -188,7 +188,7 @@ class MOManager:
         print("\n--- Starting MO Generation ---")
         
         eval_env = mo_gym.make(self.glob_cfg['env']['name'])
-        eval_pop(self.population, eval_env, [0.5,0.5], episodes_per_actor=self.cfg['episodes_per_actor'])
+        eval_pop([ind for ind in self.population if ind.vector_return is None], eval_env, [0.5,0.5], episodes_per_actor=self.cfg['episodes_per_actor'])
 
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)

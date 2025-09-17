@@ -120,12 +120,8 @@ class MOManager:
         static dataset for the subsequent fine-tuning step.
         """
         # 1. Initialize child policy by cloning a random parent's network
-        template_parent = random.choice([parent_a, parent_b])
+        template_parent = random.choice([parent_a, parent_a])
         child = template_parent.clone()
-        # flat params
-        flatA = parent_a.flat_params()
-        flatB = parent_b.flat_params()
-        child.load_flat_params(0.5 * (flatA + flatB))
         child.pop_id = uuid.uuid4().hex[:8]
 
         # 2. Determine sampling ratios from the target weights

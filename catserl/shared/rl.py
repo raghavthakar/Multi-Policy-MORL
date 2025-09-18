@@ -103,14 +103,19 @@ class TD3(Algo): # Inherit from Algo
 		action_type: str,
 		action_dim: int,
 		max_action: float,
-		scalar_weight: np.ndarray,
+		scalar_weight_like: np.ndarray,
 		cfg: dict,
 		device: torch.device,
 	) -> None:
-		
+		"""
+		Args:
+			scalar_weight_like: np.ndarray
+				An example scalar weight vector to determine the shape.
+				We do not use the actual scalar weight here because
+				it may be different for each island.
+		"""
 		self.device = device
 		self.n_actions = action_dim # Note: n_actions is a bit of a misnomer here
-		self.scalar_weight = torch.tensor(scalar_weight, device=device)
 		
 		# Load parameters from cfg for consistency and correctness
 		td3_cfg = cfg['td3'] # Get the 'td3' sub-dictionary
@@ -131,7 +136,14 @@ class TD3(Algo): # Inherit from Algo
 		self.actor_target = copy.deepcopy(self.actor)
 		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), actor_lr)
 
-		self.critic = TD3Critic(obs_shape, self.n_actions).to(self.device)
+		# Scalar weight conditioned critic
+		# Calculate the flattened dimension for the state and the weight vector.
+		flat_obs_dim = int(np.prod(obs_shape))
+		weight_dim = scalar_weight_like.shape[0]
+		critic_state_dim = flat_obs_dim + weight_dim
+		
+		# Initalise the critic and its target network and optimiser
+		self.critic = TD3Critic((critic_state_dim,), self.n_actions).to(self.device)
 		self.critic_target = copy.deepcopy(self.critic)
 		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), critic_lr)
 
@@ -180,56 +192,76 @@ class TD3(Algo): # Inherit from Algo
 	def remember(self, *transition) -> None:
 		self.buffer.push(*transition)
 
-	def update(self):
-		# print("updating", self.total_it)
+	def update(self, main_scalar_weight: np.ndarray, other_scalar_weights: list[np.ndarray]) -> None:
+		"""
+		Performs a single training step for the TD3 agent.
+
+		This method updates the critic and actor networks. The critic is conditioned
+		on a scalarization weight and is trained to predict Q-values for all
+		provided objective weightings. The actor is updated less frequently and
+		is optimized only with respect to its island's main objective.
+		"""
 		self.total_it += 1
-		# Sample replay buffer 
 		state, action, r_vec, next_state, done = self.buffer.sample(self.batch_size)
-		
 		action = action.view(self.batch_size, -1)
-		
-		# Keep reward and done tensors 2D for consistency
-		reward = (r_vec * self.scalar_weight).sum(dim=1, keepdim=True)
-		done_2d = done.unsqueeze(1)
 
-		with torch.no_grad():
-			# Select action according to policy and add clipped noise
-			noise = (
-				torch.randn_like(action) * self.policy_noise
-			).clamp(-self.noise_clip, self.noise_clip)
-			
-			next_action = (
-				self.actor_target(next_state) + noise
-			).clamp(-self.max_action, self.max_action)
+		# --- Critic Update ---
+		# The critic is trained to predict Q-values for multiple objectives, conditioned
+		# on the scalarization weight. We loop through each weight vector provided
+		# and compute a separate loss to make the critic "multi-objective aware".
+		all_scalar_weights = [main_scalar_weight] + other_scalar_weights
+		for scalar_weight_np in all_scalar_weights:
+			# Prepare the scalarization weight tensor for batch operations. This involves
+			# converting it from NumPy, moving to the correct device, and expanding
+			# its dimensions to match the batch size of the state tensors.
+			scalar_weight = torch.from_numpy(scalar_weight_np).float().to(self.device)
+			scalar_weight_batch = scalar_weight.expand(self.batch_size, -1)
 
-			# Compute the target Q value
-			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-			target_Q = torch.min(target_Q1, target_Q2)
-			# Use the 2D done tensor
-			target_Q = reward + (1 - done_2d) * self.discount * target_Q
+			# Create the conditioned input for the critic by concatenating the
+			# state/next_state and the corresponding weight vector.
+			state_conditioned = torch.cat([state, scalar_weight_batch], 1)
+			next_state_conditioned = torch.cat([next_state, scalar_weight_batch], 1)
 
-		# Get current Q estimates
-		current_Q1, current_Q2 = self.critic(state, action)
+			# Compute the scalar reward for the current objective weighting.
+			reward = (r_vec * scalar_weight).sum(dim=1, keepdim=True)
+			done_2d = done.unsqueeze(1)
 
-		# Compute critic loss
-		critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			with torch.no_grad():
+				# Target policy smoothing: add clipped noise to the target actor's actions
+				# to prevent function approximation errors from propagating.
+				noise = (torch.randn_like(action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
+				next_action = (self.actor_target(next_state) + noise).clamp(-self.max_action, self.max_action)
 
-		# Optimize the critic
-		self.critic_optimizer.zero_grad()
-		critic_loss.backward()
-		self.critic_optimizer.step()
+				# Compute the target Q-value using the clipped double-Q trick to
+				# mitigate overestimation bias.
+				target_Q1, target_Q2 = self.critic_target(next_state_conditioned, next_action)
+				target_Q = torch.min(target_Q1, target_Q2)
+				target_Q = reward + (1 - done_2d) * self.discount * target_Q
 
-		# Delayed policy updates
+			# Get the current Q-value estimates.
+			current_Q1, current_Q2 = self.critic(state_conditioned, action)
+
+			# Compute and optimize the critic loss based on the TD error.
+			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			self.critic_optimizer.zero_grad()
+			critic_loss.backward()
+			self.critic_optimizer.step()
+
+		# --- Delayed Actor and Target Network Updates ---
 		if self.total_it % self.policy_freq == 0:
-			# Compute actor loss
-			actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+			# The actor is only optimized with respect to the island's main objective.
+			# We prepare a conditioned state using only the main scalarization weight.
+			main_scalar_weight_tensor = torch.from_numpy(main_scalar_weight).float().to(self.device)
+			main_scalar_weight_batch = main_scalar_weight_tensor.expand(self.batch_size, -1)
+			state_conditioned_for_actor = torch.cat([state, main_scalar_weight_batch], 1)
 			
-			# Optimize the actor 
+			# Compute the actor loss, which aims to maximize the critic's Q-value estimate.
+			actor_loss = -self.critic.Q1(state_conditioned_for_actor, self.actor(state)).mean()
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()
 			self.actor_optimizer.step()
 
-			# Update the frozen target models
+			# Soft update the target networks using Polyak averaging.
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
@@ -273,7 +305,6 @@ class TD3(Algo): # Inherit from Algo
 # RLWorker – orchestration shell that delegates to a chosen algorithm class
 # -----------------------------------------------------------------------------
 
-
 class RLWorker:
 	"""Environment‑agnostic worker that can run multiple RL algorithms.
 
@@ -294,14 +325,12 @@ class RLWorker:
 		cfg: dict,
 		device: torch.device,
 	) -> None:
+		self.main_scalar_weight = scalar_weight # the primary scalarised objective that the island is optimising for
+		self.other_scalar_weights = other_scalar_weights # the other scalarisations that the island is not optimising for but we still want to update the critic for
 		
 		algo = algo.lower()
 		if algo == "td3":
-			self.agents = []
-			self.agents.append(TD3(obs_shape, action_type, action_dim, max_action, scalar_weight, cfg, device))
-			# Create additional agents for other scalar weights
-			for i, w in enumerate(other_scalar_weights):
-				self.agents.append(TD3(obs_shape, action_type, action_dim, max_action, w, cfg, device))
+			self.agent = TD3(obs_shape, action_type, action_dim, max_action, scalar_weight, cfg, device)
 		else:
 			raise ValueError(
 				f"Unknown algorithm '{algo}'. Add an elif branch in RLWorker.__init__."
@@ -319,7 +348,7 @@ class RLWorker:
 		self.agent.remember(*transition)
 
 	def update(self) -> None:  # noqa: D401 – imperative mood
-		self.agent.update()
+		self.agent.update(self.main_scalar_weight, self.other_scalar_weights)
 
 	def save(self, path: str) -> None:  # noqa: D401 – imperative mood
 		self.agent.save(path)

@@ -71,8 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.resume_stage2:
         # Must first train objective experts on islands.
         # Two islands with different objective weights.
-        mgr0 = IslandManager(env1, 1, np.array([1, 0]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
-        mgr1 = IslandManager(env2, 2, np.array([0, 1]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
+        mgr0 = IslandManager(env1, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
+        mgr1 = IslandManager(env2, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
 
         t = [0, 0] # track the trained timeseteps on each objective
         save_merged_pops_every = 25000

@@ -5,6 +5,7 @@ import numpy as np, random, torch
 import hashlib
 import mo_gymnasium as mo_gym
 import gymnasium as gym
+from collections import deque
 
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import deterministic_rollout
@@ -94,8 +95,8 @@ class IslandManager:
         self.updates_per_session = cfg['rl']['updates_per_session']
 
         # Stats
-        self.scalar_returns: List[float] = []
-        self.vector_returns: List[np.ndarray] = []
+        self.scalar_returns: deque = deque(maxlen=100)
+        self.vector_returns: deque = deque(maxlen=100)
         self.frames_collected = 0
 
         # Checkpointing variables

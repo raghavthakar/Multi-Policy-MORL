@@ -1,7 +1,7 @@
 # catserl/moea/finetuners.py
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Dict
+from typing import Dict, List
 
 import torch
 import numpy as np
@@ -35,15 +35,10 @@ class Finetuner(ABC):
         Factory method to create a finetuner instance from a string name.
         """
         strategy_name = strategy_name.lower()
-        if strategy_name == 'dqn':
-            return DiscreteAWRFinetuner()
-        # --- MODIFIED: Add TD3 strategy ---
-        elif strategy_name == 'td3':
-            return ContinuousAWRFinetuner()
-        elif strategy_name == 'weightedmse':
+        if strategy_name == 'weightedmse':
             return ContinuousWeightedMSEFinetuner()
         else:
-            raise ValueError(f"Unknown finetuning strategy for RL algorithm: {strategy_name}")
+            raise ValueError(f"Unknown finetuning strategy: {strategy_name}")
 
 
 class DiscreteAWRFinetuner(Finetuner):
@@ -203,24 +198,17 @@ class ContinuousAWRFinetuner(Finetuner):
                  print(f"  [Epoch {epoch + 1}/{num_epochs}] Avg AWR Loss: {avg_loss:.4f}")
         child.policy.eval()
 
-# --- NEW: Deterministic-friendly, Advantage-Weighted MSE Finetuner for TD3 ---
 class ContinuousWeightedMSEFinetuner(Finetuner):
     """
-    Fine-tunes a continuous (deterministic) policy using an AWR-style
-    advantage weighting but a weighted-MSE regression objective instead of
-    log-probabilities. This is compatible with TD3-style critics and your
-    current deterministic ContinuousPolicy.
+    Fine-tunes a continuous policy using Advantage-Weighted Mean-Squared Error.
 
-    Key details:
-      - Uses hybrid advantages built from *per-objective* critics.
-      - Uses min over twin Q-heads when available (TD3 consistency).
-      - Normalises advantages per-objective (z-score or minmax).
-      - Converts A into weights via exp(A/beta) with numerically stable centering.
-      - Optimises a weighted MSE: ||mu(s) - a||^2 scaled by those weights.
-
-    Expected critic API:
-      - Prefer critic.Q1(s,a), critic.Q2(s,a)
-      - Fallback: critic(s,a) -> (q1, q2) or a single q
+    This method leverages specialist critics that are conditioned on a
+    scalarization weight. For each transition in the child's mixed buffer, it
+    selects the critic corresponding to the transition's origin to ensure the
+    (state, action) pair is in-distribution. It then uses this single critic
+    to estimate Q-values for all objectives by providing the appropriate
+    one-hot scalarization vectors. This solves the out-of-distribution action
+    evaluation problem, leading to more reliable advantage estimates.
     """
 
     def execute(
@@ -232,55 +220,76 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
     ) -> None:
         device = next(child.policy.parameters()).device
 
-        # --- 1) Hyperparameters / config ---
+        # Hyperparameters
         lr          = float(config.get("lr", 3e-4))
         num_epochs  = int(config.get("epochs", 50))
         batch_size  = int(config.get("batch_size", 256))
-        beta        = float(config.get("awr_beta", 1.0))          # temperature
-        awr_clip    = float(config.get("awr_clip", 20.0))         # weight clipping
-        sigma2      = float(config.get("implicit_gaussian_var", 1.0))  # implicit variance for MSE~NLL
-        adv_norm    = str(config.get("adv_norm", "zscore")).lower()    # "zscore" | "minmax" | "none"
+        beta        = float(config.get("awr_beta", 1.0))
+        awr_clip    = float(config.get("awr_clip", 20.0))
+        adv_norm    = str(config.get("adv_norm", "none")).lower()
 
         if len(child.buffer) < batch_size:
-            print("[ContinuousWeightedMSEFinetuner] Child buffer too small for a full batch. Skipping.")
+            print("[WMSE Finetuner] Child buffer too small for a full batch. Skipping.")
             return
 
         optimizer = torch.optim.Adam(child.policy.parameters(), lr=lr)
-
-        critic_ids = sorted(critics.keys())
-        w = torch.from_numpy(target_scalarisation).float().to(device).unsqueeze(1)
-
-        # --- 2) Fetch full static dataset once ---
+        
+        # Prepare the dataset and one-hot vectors for objectives.
         all_s, all_a, _, _, _ = child.buffer.sample(len(child.buffer), device=device)
+        all_origins = torch.from_numpy(child.buffer_origins).long().to(device)
+        
+        num_objectives = len(critics)
+        one_hot_vectors = torch.eye(num_objectives, device=device)
 
-        # Optional: one-time dataset shuffle to avoid block ordering by source
-        perm = torch.randperm(all_s.shape[0], device=device)
-        all_s, all_a = all_s[perm], all_a[perm]
-
-        # --- Helpers for TD3 twin-critic min and hybrid advantage ---
         @torch.no_grad()
-        def _min_q(critic, s, a):
-            """Return min over twin Q-heads."""
-            out = critic(s, a)
-            q1, q2 = out[0], out[1]
+        def _min_q(critic, s_conditioned, a):
+            """Helper to return the minimum over twin Q-heads from a TD3 critic."""
+            q1, q2 = critic(s_conditioned, a)
             return torch.min(q1, q2).squeeze(-1)
 
         @torch.no_grad()
         def _compute_hybrid_advantages():
-            per_obj_advs = []
-            mu_all = child.policy(all_s)  # deterministic policy output (mu(s))
-            for cid in critic_ids:
-                critic = critics[cid]
+            """
+            Computes advantage estimates for the entire static dataset.
+            
+            This is the core of the method. It iterates through each specialist
+            critic and the data that originated from that critic's island. For
+            each of these in-distribution (s,a) pairs, it uses the specialist
+            critic to compute the advantage for ALL objectives by conditioning
+            its input on the appropriate one-hot scalarization vector.
+            """
+            n_samples = all_s.shape[0]
+            advs = torch.zeros(num_objectives, n_samples, device=device)
+            mu_all = child.policy(all_s)
+
+            for cid, critic in critics.items():
                 critic.eval()
+                # Create a mask to select only the data from this critic's island.
+                origin_mask = (all_origins == cid)
+                if not origin_mask.any():
+                    continue
 
-                q_sa = _min_q(critic, all_s, all_a)      # Q(s, a)
-                v_s  = _min_q(critic, all_s, mu_all)     # V(s) ≈ Q(s, mu(s))
-                adv_i = q_sa - v_s                       # A_i(s,a)
-                per_obj_advs.append(adv_i)
+                # Select the in-distribution subset of data.
+                s_subset = all_s[origin_mask]
+                a_subset = all_a[origin_mask]
+                mu_subset = mu_all[origin_mask]
+                n_subset = s_subset.shape[0]
 
-            advs = torch.stack(per_obj_advs, dim=0)  # [num_obj, N]
+                # For this subset of data, use this critic to calculate the
+                # advantage for every objective.
+                for obj_idx in range(num_objectives):
+                    w_vec = one_hot_vectors[obj_idx]
+                    w_batch = w_vec.expand(n_subset, -1)
+                    
+                    # Condition the state on the one-hot weight vector.
+                    s_conditioned = torch.cat([s_subset, w_batch], 1)
+                    
+                    # A(s,a) = Q(s,a) - V(s), where V(s) is approximated by Q(s, mu(s)).
+                    q_sa = _min_q(critic, s_conditioned, a_subset)
+                    v_s  = _min_q(critic, s_conditioned, mu_subset)
+                    advs[obj_idx, origin_mask] = q_sa - v_s
 
-            # Per-objective normalisation to align scales
+            # Normalize advantages per-objective to align their scales.
             if adv_norm == "zscore":
                 mu  = advs.mean(dim=1, keepdim=True)
                 std = advs.std(dim=1, keepdim=True).clamp_min(1e-6)
@@ -289,45 +298,46 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
                 mins = advs.min(dim=1, keepdim=True).values
                 maxs = advs.max(dim=1, keepdim=True).values
                 norm_advs = (advs - mins) / (maxs - mins).clamp_min(1e-8)
-            else:  # "none"
+            else: # "none"
                 norm_advs = advs
-
-            # Hybrid advantage: weighted sum across objectives
-            hybrid_adv = torch.sum(norm_advs * w, dim=0)  # [N]
+            
+            # Create the final hybrid advantage by scalarizing with the target weights.
+            w_target = torch.from_numpy(target_scalarisation).float().to(device).unsqueeze(1)
+            hybrid_adv = torch.sum(norm_advs * w_target, dim=0)
             return hybrid_adv
 
+        # Pre-compute all advantage values for the static dataset.
         with torch.no_grad():
             hybrid_advantages = _compute_hybrid_advantages()
 
         dataset = TensorDataset(all_s, all_a, hybrid_advantages)
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-        # --- 3) Weighted-MSE training loop ---
+        # --- Weighted-MSE Training Loop ---
         child.policy.train()
-        print(f"[ContinuousWeightedMSEFinetuner] Starting WMSE fine-tuning for {num_epochs} epochs "
-              f"(beta={beta}, clip={awr_clip}, norm={adv_norm}, sigma2={sigma2})...")
+        print(f"[WMSE Finetuner] Starting finetuning for {num_epochs} epochs...")
 
         for epoch in range(num_epochs):
             total_loss = 0.0
             for s_batch, a_batch, adv_batch in dataloader:
-                # Numerically-stable AWR weights: exp( (A / beta) - max )
+                # Compute advantage-weighted weights, using a numerically stable softmax.
                 x = adv_batch / beta
                 x = x - x.max().detach()
-                awr_weights = torch.exp(x).clamp(max=awr_clip)  # [B]
+                awr_weights = torch.exp(x).clamp(max=awr_clip)
 
-                mu = child.policy(s_batch)                      # [B, act_dim]
-                sq_err = ((mu - a_batch) ** 2).sum(dim=1)       # [B]
-                # Gaussian NLL up to constant factor -> (1 / (2*sigma^2)) * ||a - mu||^2
-                loss = (awr_weights * (sq_err / (2.0 * sigma2))).mean()
+                # The loss is the mean-squared error between the policy's action
+                # and the buffer action, scaled by the AWR weight.
+                mu = child.policy(s_batch)
+                mse_loss = ((mu - a_batch) ** 2).sum(dim=1)
+                loss = (awr_weights * mse_loss).mean()
 
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(child.policy.parameters(), max_norm=1.0)
                 optimizer.step()
+                total_loss += loss.item()
 
-                total_loss += float(loss.item())
-
-            avg_loss = total_loss / max(1, len(dataloader))
+            avg_loss = total_loss / len(dataloader)
             if (epoch + 1) % 10 == 0 or epoch == num_epochs - 1:
                 print(f"  [Epoch {epoch + 1}/{num_epochs}] Avg WMSE Loss: {avg_loss:.4f}")
 

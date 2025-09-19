@@ -39,11 +39,11 @@ mopderl:
   episodes_per_actor: 10
 
   # Settings for creating the child's static offline dataset
-  child_buffer_size: 50_000
+  child_buffer_size: 200_000
 
   # Hyperparameters for the AWR fine-tuning process
   finetune:
-    epochs:          50
+    epochs:          10
     lr:              3e-4
     batch_size:      256
     awr_beta:        1.0      # Temperature for continuous AWR

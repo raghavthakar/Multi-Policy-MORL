@@ -268,7 +268,7 @@ class MOManager:
         
         midpoint = 0.5 * (norm_a + norm_b)
         target_scalarisation = midpoint / np.sum(midpoint) if np.sum(midpoint) > 1e-8 else np.ones(self.num_objectives) / self.num_objectives
-        target_scalarisation = np.array([0.9, 0.1])
+        # target_scalarisation = np.array([0.9, 0.1])
         print(f"Calculated target weights: {target_scalarisation}")
 
         # 3. Offspring Creation

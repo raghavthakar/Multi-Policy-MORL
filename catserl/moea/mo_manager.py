@@ -75,6 +75,58 @@ class MOManager:
         self.generation = 0
         self.visualizer = BasicVisualizer(num_objectives=self.num_objectives)
 
+        if self.cfg.get("repopulate_buffer", True):
+            # The number of new transitions to collect for the expert buffer
+            num_steps_to_collect = self.cfg.get("repopulate_steps", 500_000)
+
+            print("\n--- Starting Expert Buffer Repopulation ---")
+            
+            # 1. Identify actor and buffer based on your comment:
+            # "Buffer and critic with ids 1 correspond to actor pop[0]"
+            expert_actor = self.population[0]
+            buffer_to_repopulate = self.specialist_buffers[1]
+            
+            print(f"Target: Repopulating buffer [ID: 1] with data from actor '{expert_actor.pop_id}'.")
+            print(f"Clearing old data and collecting {num_steps_to_collect} new transitions.")
+
+            # 2. Clear the old buffer by resetting its internal pointers.
+            # This effectively makes the buffer empty without reallocating memory.
+            buffer_to_repopulate.ptr = 0
+            buffer_to_repopulate.size = 0
+            
+            # 3. Create a temporary environment for the data collection rollout.
+            rollout_env = mo_gym.make(self.glob_cfg['env']['name'])
+            
+            # 4. Perform rollouts and add the new expert data to the buffer.
+            total_steps = 0
+            while total_steps < num_steps_to_collect:
+                obs, _ = rollout_env.reset()
+                done = False
+                episode_steps = 0
+                
+                while not done:
+                    with torch.no_grad():
+                        # Use the deterministic action from the expert policy
+                        action = expert_actor.act(np.array(obs), use_noise=False)
+                    
+                    next_obs, reward, terminated, truncated, _ = rollout_env.step(action)
+                    done = terminated or truncated
+                    
+                    # Add the collected transition to the (now empty) specialist buffer
+                    buffer_to_repopulate.push(obs, action, reward, next_obs, float(done))
+                    
+                    obs = next_obs
+                    total_steps += 1
+                    episode_steps += 1
+
+                    if total_steps >= num_steps_to_collect:
+                        break
+                
+                print(f"  [Rollout] Episode finished ({episode_steps} steps). "
+                      f"Total steps collected: {total_steps}/{num_steps_to_collect}")
+
+            print(f"--- Finished Repopulation. Buffer [ID: 1] now contains {len(buffer_to_repopulate)} expert transitions. ---\n")
+
     def _get_pareto_front(self, population: List[Actor]) -> List[Actor]:
         """
         Filters a list of actors to return only the Pareto-optimal set.

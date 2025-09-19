@@ -57,73 +57,7 @@ class Algo:  # noqa: D101 – doctring would just repeat the method names
 	def load(self, path: str) -> None:  # noqa: D401 – imperative mood
 		raise NotImplementedError
 
-
-# -----------------------------------------------------------------------------
-# Dueling‑DQN implementation (identical learning logic as the original worker)
-# -----------------------------------------------------------------------------
-
-
 from catserl.shared.buffers import ReplayBuffer  # isort: skip  (project import)
-
-
-def _init_linear(layer: nn.Linear) -> None:
-	"""Kaiming‑uniform initialization keeps early Q‑values small and stable."""
-
-	nn.init.kaiming_uniform_(layer.weight, a=0.0)
-	nn.init.zeros_(layer.bias)
-
-
-class DuelingQNet(nn.Module):
-	"""2‑stream Dueling architecture with shared torso (simple MLP)."""
-
-	def __init__(
-		self, obs_shape: Tuple[int, ...], n_actions: int, hidden_dim: int = 128
-	) -> None:
-		super().__init__()
-		in_dim = int(np.prod(obs_shape))
-		self.shared = nn.Sequential(
-			nn.Flatten(),
-			nn.Linear(in_dim, hidden_dim),
-			nn.ReLU(),
-		)
-		self.v = nn.Sequential(
-			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
-			nn.Linear(hidden_dim, 1),
-		)
-		self.a = nn.Sequential(
-			nn.Linear(hidden_dim, hidden_dim),
-			nn.ReLU(),
-			nn.Linear(hidden_dim, n_actions),
-		)
-
-		# Initialize every Linear layer
-		for net in (self.shared, self.v, self.a):
-			for m in net:
-				if isinstance(m, nn.Linear):
-					_init_linear(m)
-
-	# ------------------------------------------------------------------
-	# Forward helpers
-	# ------------------------------------------------------------------
-	def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D401
-		"""Return per‑action Q‑values with aggregating **advantage** + **value**.
-
-		Q(s, a) = V(s) + A(s, a) − mean_a A(s, a)
-		"""
-
-		h = self.shared(x)
-		v = self.v(h)  # [B, 1]
-		a = self.a(h)  # [B, |A|]
-		q = v + a - a.mean(dim=1, keepdim=True)
-		return q
-
-	def value(self, x: torch.Tensor) -> torch.Tensor:
-		"""State‑value helper for monitoring (no action dimension)."""
-
-		h = self.shared(x)
-		v = self.v(h).squeeze(-1)
-		return v
 
 class TD3Critic(nn.Module):
 	def __init__(self, state_dim, action_dim):
@@ -162,168 +96,6 @@ class TD3Critic(nn.Module):
 		q1 = self.l3(q1)
 		return q1
 
-
-class DQN(Algo):
-	"""Dueling‑DQN + Double‑DQN updates + soft target network.
-
-	This class contains **all** learning components: networks, replay buffer,
-	optimizer, ε‑schedule and update rules.  RLWorker will treat it as a black
-	box implementing the small `Algo` interface.
-	"""
-
-	# ------------------------------------------------------------------
-	# Construction helpers
-	# ------------------------------------------------------------------
-	def __init__(
-		self,
-		obs_shape: Tuple[int, ...],
-		action_type: str,
-		action_dim: int,
-		scalar_weight: np.ndarray,
-		cfg: dict,
-		device: torch.device,
-	) -> None:
-		if action_type != "discrete":
-			raise ValueError("DQN algorithm only supports discrete action spaces.")
-		
-		self.device = device
-		self.n_actions = action_dim
-		self.scalar_weight = torch.tensor(scalar_weight, device=device)
-
-		# Networks ----------------------------------------------------
-		hid = int(cfg.get("hidden_dim", 128))
-		self.net = DuelingQNet(obs_shape, self.n_actions, hid).to(device)
-		self.tgt = DuelingQNet(obs_shape, self.n_actions, hid).to(device)
-		self.tgt.load_state_dict(self.net.state_dict())
-
-		# Optimizer & hyper‑parameters --------------------------------
-		self.lr = float(cfg.get("lr", 1e-4))
-		self.gamma = float(cfg.get("gamma", 0.99))
-		self.tau = float(cfg.get("tau", 0.005))  # soft‑update coeff.
-		self.optim = Adam(self.net.parameters(), lr=self.lr)
-
-		# Replay buffer ----------------------------------------------
-		self.buffer = ReplayBuffer(
-			obs_shape,
-			action_type,
-			action_dim,
-			capacity=int(cfg.get("buffer_size", 100_000)),
-			device=device,
-		)
-
-		# ε‑greedy schedule ------------------------------------------
-		self.eps_start = float(cfg.get("eps_start", 1.0))
-		self.eps_end = float(cfg.get("eps_end", 0.05))
-		self.eps_decay = int(cfg.get("eps_decay_frames", 50_000))
-		self.frame_idx = 0  # increments every env‑step
-
-		# Update cadence ---------------------------------------------
-		self.batch_size = int(cfg.get("batch_size", 64))
-		self.update_every = int(cfg.get("update_every", 4))
-		self.update_ctr = 0
-
-	# ------------------------------------------------------------------
-	# Public API (satisfies Algo interface)
-	# ------------------------------------------------------------------
-	def act(self, state: np.ndarray, **kwargs) -> int:
-		"""ε‑greedy action selection using the online network."""
-
-		self.frame_idx += 1
-		if np.random.rand() < self._epsilon():
-			return np.random.randint(self.n_actions)
-
-		t = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-		q = self.net(t)  # [1, |A|]
-		return int(q.argmax(dim=1).item())
-
-	def remember(self, *transition) -> None:
-		"""Push (s, a, r_vec, s2, done) into replay buffer."""
-
-		self.buffer.push(*transition)
-
-	def update(self) -> None:
-		"""One Double‑DQN update if enough data is available."""
-
-		if len(self.buffer) < self.batch_size:
-			return
-
-		# ------------------------------------------------------------------
-		# Sample batch & compute targets
-		# ------------------------------------------------------------------
-		s, a, r_vec, s2, d = self.buffer.sample(self.batch_size)
-		d = d.unsqueeze(1)  # [B, 1]
-		# Scalarize multi‑objective reward
-		r = (r_vec * self.scalar_weight).sum(dim=1, keepdim=True)  # [B, 1]
-
-		# Current Q(s,a)
-		q = self.net(s).gather(1, a.unsqueeze(1))
-
-		with torch.no_grad():
-			# Double‑DQN: action from *online* net, value from *target* net
-			best_a = self.net(s2).argmax(dim=1, keepdim=True)
-			q_next = self.tgt(s2).gather(1, best_a)
-			y = r + self.gamma * (1 - d) * q_next  # TD target
-
-		# ------------------------------------------------------------------
-		# Optimize
-		# ------------------------------------------------------------------
-		loss = F.smooth_l1_loss(q, y)
-		self.optim.zero_grad()
-		loss.backward()
-		self.optim.step()
-
-		# Soft‑update target parameters
-		for p, tp in zip(self.net.parameters(), self.tgt.parameters()):
-			tp.data.mul_(1 - self.tau).add_(self.tau * p.data)
-
-	def save(self, path: str) -> None:
-		torch.save(
-			{
-				"net": self.net.state_dict(),
-				"tgt": self.tgt.state_dict(),
-				"opt": self.optim.state_dict(),
-				"frame": self.frame_idx,
-			},
-			path,
-		)
-
-	def load(self, path: str) -> None:
-		ck = torch.load(path, map_location=self.device)
-		self.net.load_state_dict(ck["net"])
-		self.tgt.load_state_dict(ck["tgt"])
-		self.optim.load_state_dict(ck["opt"])
-		self.frame_idx = ck["frame"]
-
-	# ------------------------------------------------------------------
-	# Extras (not part of Algo but handy for GA / diagnostics)
-	# ------------------------------------------------------------------
-	def export_policy_params(self):  # noqa: D401 – imperative mood
-		"""Flatten weights that affect arg‑max policy for downstream GA."""
-
-		with torch.no_grad():
-			flat = torch.cat(
-				[
-					self.net.shared[1].weight.flatten(),
-					self.net.shared[1].bias,
-					self.net.a[0].weight.flatten(),
-					self.net.a[0].bias,
-					self.net.a[2].weight.flatten(),
-					self.net.a[2].bias,
-				]
-			).cpu().clone()
-
-		hidden_dim = self.net.shared[1].out_features
-		return flat, hidden_dim
-
-	# ------------------------------------------------------------------
-	# Internal helpers
-	# ------------------------------------------------------------------
-	def _epsilon(self) -> float:
-		"""Linearly decay ε over ``eps_decay`` frames."""
-
-		frac = min(1.0, self.frame_idx / self.eps_decay)
-		return self.eps_start + frac * (self.eps_end - self.eps_start)
-
 class TD3(Algo): # Inherit from Algo
 	def __init__(
 		self,
@@ -331,14 +103,19 @@ class TD3(Algo): # Inherit from Algo
 		action_type: str,
 		action_dim: int,
 		max_action: float,
-		scalar_weight: np.ndarray,
+		scalar_weight_like: np.ndarray,
 		cfg: dict,
 		device: torch.device,
 	) -> None:
-		
+		"""
+		Args:
+			scalar_weight_like: np.ndarray
+				An example scalar weight vector to determine the shape.
+				We do not use the actual scalar weight here because
+				it may be different for each island.
+		"""
 		self.device = device
 		self.n_actions = action_dim # Note: n_actions is a bit of a misnomer here
-		self.scalar_weight = torch.tensor(scalar_weight, device=device)
 		
 		# Load parameters from cfg for consistency and correctness
 		td3_cfg = cfg['td3'] # Get the 'td3' sub-dictionary
@@ -359,7 +136,14 @@ class TD3(Algo): # Inherit from Algo
 		self.actor_target = copy.deepcopy(self.actor)
 		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), actor_lr)
 
-		self.critic = TD3Critic(obs_shape, self.n_actions).to(self.device)
+		# Scalar weight conditioned critic
+		# Calculate the flattened dimension for the state and the weight vector.
+		flat_obs_dim = int(np.prod(obs_shape))
+		weight_dim = scalar_weight_like.shape[0]
+		critic_state_dim = flat_obs_dim + weight_dim
+		
+		# Initalise the critic and its target network and optimiser
+		self.critic = TD3Critic((critic_state_dim,), self.n_actions).to(self.device)
 		self.critic_target = copy.deepcopy(self.critic)
 		self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), critic_lr)
 
@@ -408,56 +192,76 @@ class TD3(Algo): # Inherit from Algo
 	def remember(self, *transition) -> None:
 		self.buffer.push(*transition)
 
-	def update(self):
-		# print("updating", self.total_it)
+	def update(self, main_scalar_weight: np.ndarray, other_scalar_weights: list[np.ndarray]) -> None:
+		"""
+		Performs a single training step for the TD3 agent.
+
+		This method updates the critic and actor networks. The critic is conditioned
+		on a scalarization weight and is trained to predict Q-values for all
+		provided objective weightings. The actor is updated less frequently and
+		is optimized only with respect to its island's main objective.
+		"""
 		self.total_it += 1
-		# Sample replay buffer 
 		state, action, r_vec, next_state, done = self.buffer.sample(self.batch_size)
-		
 		action = action.view(self.batch_size, -1)
-		
-		# Keep reward and done tensors 2D for consistency
-		reward = (r_vec * self.scalar_weight).sum(dim=1, keepdim=True)
-		done_2d = done.unsqueeze(1)
 
-		with torch.no_grad():
-			# Select action according to policy and add clipped noise
-			noise = (
-				torch.randn_like(action) * self.policy_noise
-			).clamp(-self.noise_clip, self.noise_clip)
-			
-			next_action = (
-				self.actor_target(next_state) + noise
-			).clamp(-self.max_action, self.max_action)
+		# --- Critic Update ---
+		# The critic is trained to predict Q-values for multiple objectives, conditioned
+		# on the scalarization weight. We loop through each weight vector provided
+		# and compute a separate loss to make the critic "multi-objective aware".
+		all_scalar_weights = [main_scalar_weight] + other_scalar_weights
+		for scalar_weight_np in all_scalar_weights:
+			# Prepare the scalarization weight tensor for batch operations. This involves
+			# converting it from NumPy, moving to the correct device, and expanding
+			# its dimensions to match the batch size of the state tensors.
+			scalar_weight = torch.from_numpy(scalar_weight_np).float().to(self.device)
+			scalar_weight_batch = scalar_weight.expand(self.batch_size, -1)
 
-			# Compute the target Q value
-			target_Q1, target_Q2 = self.critic_target(next_state, next_action)
-			target_Q = torch.min(target_Q1, target_Q2)
-			# Use the 2D done tensor
-			target_Q = reward + (1 - done_2d) * self.discount * target_Q
+			# Create the conditioned input for the critic by concatenating the
+			# state/next_state and the corresponding weight vector.
+			state_conditioned = torch.cat([state, scalar_weight_batch], 1)
+			next_state_conditioned = torch.cat([next_state, scalar_weight_batch], 1)
 
-		# Get current Q estimates
-		current_Q1, current_Q2 = self.critic(state, action)
+			# Compute the scalar reward for the current objective weighting.
+			reward = (r_vec * scalar_weight).sum(dim=1, keepdim=True)
+			done_2d = done.unsqueeze(1)
 
-		# Compute critic loss
-		critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			with torch.no_grad():
+				# Target policy smoothing: add clipped noise to the target actor's actions
+				# to prevent function approximation errors from propagating.
+				noise = (torch.randn_like(action) * self.policy_noise).clamp(-self.noise_clip, self.noise_clip)
+				next_action = (self.actor_target(next_state) + noise).clamp(-self.max_action, self.max_action)
 
-		# Optimize the critic
-		self.critic_optimizer.zero_grad()
-		critic_loss.backward()
-		self.critic_optimizer.step()
+				# Compute the target Q-value using the clipped double-Q trick to
+				# mitigate overestimation bias.
+				target_Q1, target_Q2 = self.critic_target(next_state_conditioned, next_action)
+				target_Q = torch.min(target_Q1, target_Q2)
+				target_Q = reward + (1 - done_2d) * self.discount * target_Q
 
-		# Delayed policy updates
+			# Get the current Q-value estimates.
+			current_Q1, current_Q2 = self.critic(state_conditioned, action)
+
+			# Compute and optimize the critic loss based on the TD error.
+			critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
+			self.critic_optimizer.zero_grad()
+			critic_loss.backward()
+			self.critic_optimizer.step()
+
+		# --- Delayed Actor and Target Network Updates ---
 		if self.total_it % self.policy_freq == 0:
-			# Compute actor loss
-			actor_loss = -self.critic.Q1(state, self.actor(state)).mean()
+			# The actor is only optimized with respect to the island's main objective.
+			# We prepare a conditioned state using only the main scalarization weight.
+			main_scalar_weight_tensor = torch.from_numpy(main_scalar_weight).float().to(self.device)
+			main_scalar_weight_batch = main_scalar_weight_tensor.expand(self.batch_size, -1)
+			state_conditioned_for_actor = torch.cat([state, main_scalar_weight_batch], 1)
 			
-			# Optimize the actor 
+			# Compute the actor loss, which aims to maximize the critic's Q-value estimate.
+			actor_loss = -self.critic.Q1(state_conditioned_for_actor, self.actor(state)).mean()
 			self.actor_optimizer.zero_grad()
 			actor_loss.backward()
 			self.actor_optimizer.step()
 
-			# Update the frozen target models
+			# Soft update the target networks using Polyak averaging.
 			for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
 				target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
@@ -501,7 +305,6 @@ class TD3(Algo): # Inherit from Algo
 # RLWorker – orchestration shell that delegates to a chosen algorithm class
 # -----------------------------------------------------------------------------
 
-
 class RLWorker:
 	"""Environment‑agnostic worker that can run multiple RL algorithms.
 
@@ -518,18 +321,16 @@ class RLWorker:
 		action_dim: int,
 		max_action: float,
 		scalar_weight: np.ndarray,
+		other_scalar_weights: list[np.ndarray],
 		cfg: dict,
 		device: torch.device,
 	) -> None:
+		self.main_scalar_weight = scalar_weight # the primary scalarised objective that the island is optimising for
+		self.other_scalar_weights = other_scalar_weights # the other scalarisations that the island is not optimising for but we still want to update the critic for
+		
 		algo = algo.lower()
-		if algo == "dqn":
-			self.agent: Algo = DQN(
-				obs_shape, action_type, action_dim, scalar_weight, cfg, device
-			)
-		elif algo == "td3":
-			self.agent: Algo = TD3(
-				obs_shape, action_type, action_dim, max_action, scalar_weight, cfg, device
-			)
+		if algo == "td3":
+			self.agent = TD3(obs_shape, action_type, action_dim, max_action, scalar_weight, cfg, device)
 		else:
 			raise ValueError(
 				f"Unknown algorithm '{algo}'. Add an elif branch in RLWorker.__init__."
@@ -547,7 +348,7 @@ class RLWorker:
 		self.agent.remember(*transition)
 
 	def update(self) -> None:  # noqa: D401 – imperative mood
-		self.agent.update()
+		self.agent.update(self.main_scalar_weight, self.other_scalar_weights)
 
 	def save(self, path: str) -> None:  # noqa: D401 – imperative mood
 		self.agent.save(path)

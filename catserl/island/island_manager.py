@@ -27,6 +27,7 @@ class IslandManager:
                  env,
                  island_id: int,
                  scalar_weight: np.ndarray,
+                 other_scalar_weights: List[np.ndarray],
                  cfg: Dict,
                  checkpointer: checkpoint.Checkpoint = None,
                  seed: int = 2024,
@@ -58,6 +59,7 @@ class IslandManager:
         self.rs = np.random.RandomState(seed)
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
+        self.other_ws = other_scalar_weights
 
         # Inspect the environment's action space to generalize.
         if isinstance(self.env.action_space, gym.spaces.Discrete):
@@ -77,6 +79,7 @@ class IslandManager:
                                self.action_dim,
                                self.max_action,
                                self.w,
+                               self.other_ws,
                                cfg["rl"],
                                device)
 
@@ -215,8 +218,8 @@ class IslandManager:
                 scalar_return = (ep_return_vec * self.w).sum()
                 print(f"Total Steps: {t+1}, Episode: {episodes_completed+1}, Ep. Length: {ep_len}, Scalar Return: {scalar_return:.2f}")
 
-                if t >= start_timesteps and t % self.update_every_n_steps == 0:
-                    self._eval_policy()
+                # if t >= start_timesteps and t % self.update_every_n_steps == 0:
+                #     self._eval_policy()
                 
                 # Store metrics in the manager
                 self.scalar_returns.append(scalar_return)

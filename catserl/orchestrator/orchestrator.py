@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         mgr1 = IslandManager(env2, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
 
         t = [0, 0] # track the trained timeseteps on each objective
-        save_merged_pops_every = 25000
+        save_merged_pops_every = 200000
         num_checkpts = 0 # track how many times merged populations have been checkpointed
         total_timesteps = cfg['rl']['total_timesteps']
         

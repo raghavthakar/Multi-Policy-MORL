@@ -100,7 +100,7 @@ class IslandManager:
         self.frames_collected = 0
 
         # Checkpointing variables
-        self.timesteps_between_checkpoints = 25000
+        self.timesteps_between_checkpoints = 200000
         self.checkpointer = checkpointer
 
         # Track training variables

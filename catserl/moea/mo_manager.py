@@ -77,7 +77,7 @@ class MOManager:
 
         if self.cfg.get("repopulate_buffer", True):
             # The number of new transitions to collect for the expert buffer
-            num_steps_to_collect = self.cfg.get("repopulate_steps", 500_000)
+            num_steps_to_collect = self.cfg.get("repopulate_steps", 1_000_000)
 
             print("\n--- Starting Expert Buffer Repopulation ---")
             
@@ -96,6 +96,7 @@ class MOManager:
             
             # 3. Create a temporary environment for the data collection rollout.
             rollout_env = mo_gym.make(self.glob_cfg['env']['name'])
+            rollout_env.reset(seed=2024)
             
             # 4. Perform rollouts and add the new expert data to the buffer.
             total_steps = 0
@@ -222,12 +223,18 @@ class MOManager:
         is required by the finetuner to select the correct in-distribution critic.
         """
         # Initialize child policy by averaging parent parameters.
+        # child = parent_a.clone()
+        # child.pop_id = uuid.uuid4().hex[:8]
+        
+        # flatA = parent_a.flat_params()
+        # flatB = parent_b.flat_params()
+        # child.load_flat_params(0.5 * (flatA + flatB))
+
+        # TEST
+        if parent_b.vector_return[0] > parent_a.vector_return[0]:
+            parent_a, parent_b = parent_b, parent_a
         child = parent_a.clone()
         child.pop_id = uuid.uuid4().hex[:8]
-        
-        flatA = parent_a.flat_params()
-        flatB = parent_b.flat_params()
-        child.load_flat_params(0.5 * (flatA + flatB))
 
         # Determine sampling ratios from the target weights.
         new_buffer_size = self.cfg['child_buffer_size']
@@ -288,6 +295,29 @@ class MOManager:
         
         print(f"Child's buffer created with {len(child.buffer)} total transitions.")
         return child
+    
+    def _mutate_policy(self, child: Actor, mutation_strength: float) -> None:
+        """
+        Applies Gaussian noise to the parameters of a child's policy network.
+
+        This method iterates through each parameter tensor in the policy and adds
+        noise drawn from a normal distribution (mean=0, std=mutation_strength).
+        The modification is performed in-place.
+
+        Args:
+            child: The actor whose policy network will be mutated.
+            mutation_strength: The standard deviation of the Gaussian noise.
+        """
+        # Ensure no gradients are tracked during this operation for efficiency.
+        with torch.no_grad():
+            # Iterate over all parameters (weights and biases) in the policy.
+            for param in child.policy.parameters():
+                # Create a noise tensor with the same shape and on the same device
+                # as the parameter tensor.
+                noise = torch.randn_like(param) * mutation_strength
+                
+                # Add the generated noise to the parameter tensor in-place.
+                param.add_(noise)
 
     def evolve(self):
         """

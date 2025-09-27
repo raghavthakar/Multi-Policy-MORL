@@ -20,6 +20,7 @@ from catserl.moea.finetuners import Finetuner
 
 __all__ = ["MOManager"]
 
+from torch.utils.data import DataLoader, TensorDataset  # NEW: for distillation pretrain
 
 class MOManager:
     """
@@ -186,13 +187,10 @@ class MOManager:
         """
         Creates a child actor and a targeted offline dataset for finetuning.
         """
-        # Initialize the child's policy by averaging the parameters of its parents
-        # to create a promising starting point between them in the parameter space.
+        # Start the child as a clone of one parent (keeps architecture/optim state intact).
+        # We'll *not* average weights; instead we'll align behavior in action space below.
         child = parent_a.clone()
         child.pop_id = uuid.uuid4().hex[:8]
-        flatA = parent_a.flat_params()
-        flatB = parent_b.flat_params()
-        child.load_flat_params(0.5 * (flatA + flatB))
 
         # Determine the number of samples to draw from each specialist buffer
         # based on the target trade-off weights.
@@ -251,6 +249,18 @@ class MOManager:
         child.buffer_origins = final_origins
         
         print(f"Child's buffer created with {len(child.buffer)} total transitions.")
+        
+        # === Action-space distillation init ==============================
+        # Briefly pretrain the child so that π_child(s) ≈ 0.5*(π_A(s)+π_B(s))
+        # on *the same states* that it will be finetuned on. This avoids permutation
+        # mismatch problems from raw weight-averaging and tends to land the
+        # child at a reasonable behavioral midpoint before AWR finetuning.
+        try:
+            self._action_space_distill(child, parent_a, parent_b)
+        except Exception as e:
+            print(f"[Warn] Distillation pretrain skipped due to error: {e}")
+        # =================================================================
+        
         return child
     
     def _mutate_policy(self, child: Actor, mutation_strength: float) -> None:
@@ -261,6 +271,68 @@ class MOManager:
             for param in child.policy.parameters():
                 noise = torch.randn_like(param) * mutation_strength
                 param.add_(noise)
+
+    def _action_space_distill(
+        self,
+        child: Actor,
+        parent_a: Actor,
+        parent_b: Actor,
+    ) -> None:
+        """
+        Minimal, fast behavior distillation:
+        Train π_child to match the average parent action on the child's buffer states.
+        - Uses a few thousand gradient steps (configurable via cfg['finetune'] entries).
+        - Adds tiny Gaussian noise at the end to de-correlate runs.
+        """
+        # Hyperparameters with safe fallbacks; keep it lightweight.
+        ft_cfg = self.cfg.get('finetune', {})
+        steps      = int(ft_cfg.get('pretrain_steps', 2000))
+        batch_size = int(ft_cfg.get('pretrain_batch', 256))
+        lr         = float(ft_cfg.get('pretrain_lr', 3e-4))
+        noise_std  = float(ft_cfg.get('pretrain_noise_std', 1e-3))
+
+        if steps <= 0 or len(child.buffer) == 0:
+            return
+
+        device = next(child.policy.parameters()).device
+
+        # Pull all states once to avoid buffer re-sampling overhead.
+        all_s, _, _, _, _ = child.buffer.sample(len(child.buffer), device=device)
+        ds = TensorDataset(all_s)
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False)
+
+        # Parents are only used for target actions; no gradients needed.
+        parent_a.policy.eval()
+        parent_b.policy.eval()
+        child.policy.train()
+
+        opt = torch.optim.Adam(child.policy.parameters(), lr=lr)
+
+        # One pass = ~len(loader) updates; loop until we hit 'steps'.
+        updates = 0
+        while updates < steps:
+            for (s_batch,) in loader:
+                with torch.no_grad():
+                    a_tgt = 0.5 * (parent_a.policy(s_batch) + parent_b.policy(s_batch))
+                a_pred = child.policy(s_batch)
+                loss = torch.mean((a_pred - a_tgt) ** 2)
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(child.policy.parameters(), max_norm=1.0)
+                opt.step()
+                updates += 1
+                if updates >= steps:
+                    break
+
+        # Tiny parameter noise to prevent identical minima across runs.
+        with torch.no_grad():
+            for p in child.policy.parameters():
+                # Scale noise by parameter std to be architecture-agnostic.
+                std = p.detach().float().std()
+                if torch.isfinite(std) and std > 0:
+                    p.add_(noise_std * std * torch.randn_like(p))
+
+        child.policy.eval()
 
     def evolve(self):
         """

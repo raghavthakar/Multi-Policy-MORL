@@ -66,56 +66,45 @@ class MOManager:
             raise ValueError("Cannot initialize MOManager: loaded population is empty.")
 
         self.rl_alg = self.population[0].kind
-        self.finetuner = Finetuner.create('weightedmse')
+        self.finetuner = Finetuner.create('weightedmse', self.cfg['finetune'])
 
         print(f"[MOManager] Loaded: {len(self.population)} actors, {len(self.critics)} critics, "
               f"and {len(self.specialist_buffers)} specialist buffers.")
-        print(f"[MOManager] Using finetuning strategy for '{self.rl_alg.upper()}' algorithm.")
 
         self.generation = 0
         self.visualizer = BasicVisualizer(num_objectives=self.num_objectives)
 
-        if self.cfg.get("repopulate_buffer", True):
-            # The number of new transitions to collect for the expert buffer
+        # Optionally, repopulate a specialist buffer with fresh data from the
+        # final expert policy to ensure high data quality for finetuning.
+        if self.cfg.get("repopulate_buffer", False):
             num_steps_to_collect = self.cfg.get("repopulate_steps", 1_000_000)
-
             print("\n--- Starting Expert Buffer Repopulation ---")
             
-            # 1. Identify actor and buffer based on your comment:
-            # "Buffer and critic with ids 1 correspond to actor pop[0]"
             expert_actor = self.population[0]
             buffer_to_repopulate = self.specialist_buffers[1]
-            
-            print(f"Target: Repopulating buffer [ID: 1] with data from actor '{expert_actor.pop_id}'.")
-            print(f"Clearing old data and collecting {num_steps_to_collect} new transitions.")
+            print(f"Target: Repopulating buffer [ID: 1] with {num_steps_to_collect} transitions from actor '{expert_actor.pop_id}'.")
 
-            # 2. Clear the old buffer by resetting its internal pointers.
-            # This effectively makes the buffer empty without reallocating memory.
+            # Clear the old buffer by resetting its internal pointers.
             buffer_to_repopulate.ptr = 0
             buffer_to_repopulate.size = 0
             
-            # 3. Create a temporary environment for the data collection rollout.
             rollout_env = mo_gym.make(self.glob_cfg['env']['name'])
-            rollout_env.reset(seed=2024)
+            global_seed = self.glob_cfg.get("seed", 2024)
+            obs, _ = rollout_env.reset(seed=global_seed)
             
-            # 4. Perform rollouts and add the new expert data to the buffer.
             total_steps = 0
             while total_steps < num_steps_to_collect:
-                obs, _ = rollout_env.reset()
                 done = False
                 episode_steps = 0
-                
                 while not done:
                     with torch.no_grad():
-                        # Use the deterministic action from the expert policy
+                        # Use the deterministic action from the expert policy.
                         action = expert_actor.act(np.array(obs), use_noise=False)
                     
                     next_obs, reward, terminated, truncated, _ = rollout_env.step(action)
                     done = terminated or truncated
                     
-                    # Add the collected transition to the (now empty) specialist buffer
-                    buffer_to_repopulate.push(obs, action, reward, next_obs, float(done))
-                    
+                    buffer_to_repopulate.push(obs, action, np.array(reward, dtype=np.float32), next_obs, float(done))
                     obs = next_obs
                     total_steps += 1
                     episode_steps += 1
@@ -123,40 +112,29 @@ class MOManager:
                     if total_steps >= num_steps_to_collect:
                         break
                 
-                print(f"  [Rollout] Episode finished ({episode_steps} steps). "
-                      f"Total steps collected: {total_steps}/{num_steps_to_collect}")
+                print(f"  [Rollout] Episode finished ({episode_steps} steps). Total collected: {total_steps}/{num_steps_to_collect}")
+                obs, _ = rollout_env.reset() # Subsequent resets are unseeded but deterministic.
 
             print(f"--- Finished Repopulation. Buffer [ID: 1] now contains {len(buffer_to_repopulate)} expert transitions. ---\n")
 
     def _get_pareto_front(self, population: List[Actor]) -> List[Actor]:
         """
         Filters a list of actors to return only the Pareto-optimal set.
-
-        An actor is considered Pareto-optimal if no other actor in the population
-        is better in at least one objective while being no worse in all others.
-
-        Args:
-            population: A list of actors that have been evaluated.
-
-        Returns:
-            A list containing only the non-dominated actors from the population.
         """
         pareto_front = []
         for actor_p in population:
             is_dominated = False
             for actor_q in population:
-                # An actor cannot be dominated by itself.
                 if actor_p is actor_q:
                     continue
                 
-                # Check if actor_q dominates actor_p. This is true if actor_q's
-                # returns are greater than or equal to actor_p's in all objectives,
-                # and strictly greater in at least one objective.
+                # An actor is dominated if another actor performs strictly better on at
+                # least one objective and no worse on all other objectives.
                 p_returns = actor_p.vector_return
                 q_returns = actor_q.vector_return
                 if np.all(q_returns >= p_returns) and np.any(q_returns > p_returns):
                     is_dominated = True
-                    break  # Found a dominator, no need to check further.
+                    break
             
             if not is_dominated:
                 pareto_front.append(actor_p)
@@ -169,11 +147,6 @@ class MOManager:
         """
         Identifies the largest adjacent gap on the Pareto front using the
         'Sort-and-Scan' method for parent selection.
-
-        This method first filters the population to find the non-dominated
-        (Pareto-optimal) set of actors. It then sorts this set along one
-        objective to establish an ordering and finds the adjacent pair with
-        the largest Euclidean distance in the objective space.
         """
         evaluated_actors = [p for p in population if p.vector_return is not None]
 
@@ -186,18 +159,15 @@ class MOManager:
             return None, None
 
         # Step 2: Sort the Pareto front by the first objective to define adjacency.
-        # This creates a path along the front, from one extreme to the other.
         pareto_actors.sort(key=lambda p: p.vector_return[0])
 
-        # Step 3: Scan through adjacent pairs in the sorted list to find the
-        # pair with the largest Euclidean distance between their returns.
+        # Step 3: Scan through adjacent pairs to find the largest Euclidean distance.
         max_dist = -1.0
         parent_a, parent_b = None, None
 
         for i in range(len(pareto_actors) - 1):
             p1 = pareto_actors[i]
             p2 = pareto_actors[i+1]
-            
             dist = np.linalg.norm(p1.vector_return - p2.vector_return)
             
             if dist > max_dist:
@@ -215,28 +185,17 @@ class MOManager:
     ) -> Actor:
         """
         Creates a child actor and a targeted offline dataset for finetuning.
-
-        The child's policy network is initialized by averaging its parents'
-        parameters. Its buffer is populated by sampling from the specialist
-        replay buffers in proportion to the target scalarisation weights.
-        Crucially, it also tracks the origin island of each transition, which
-        is required by the finetuner to select the correct in-distribution critic.
         """
-        # Initialize child policy by averaging parent parameters.
-        # child = parent_a.clone()
-        # child.pop_id = uuid.uuid4().hex[:8]
-        
-        # flatA = parent_a.flat_params()
-        # flatB = parent_b.flat_params()
-        # child.load_flat_params(0.5 * (flatA + flatB))
-
-        # TEST
-        if parent_b.vector_return[0] > parent_a.vector_return[0]:
-            parent_a, parent_b = parent_b, parent_a
+        # Initialize the child's policy by averaging the parameters of its parents
+        # to create a promising starting point between them in the parameter space.
         child = parent_a.clone()
         child.pop_id = uuid.uuid4().hex[:8]
+        flatA = parent_a.flat_params()
+        flatB = parent_b.flat_params()
+        child.load_flat_params(0.5 * (flatA + flatB))
 
-        # Determine sampling ratios from the target weights.
+        # Determine the number of samples to draw from each specialist buffer
+        # based on the target trade-off weights.
         new_buffer_size = self.cfg['child_buffer_size']
         island_ids = sorted(self.specialist_buffers.keys())
         num_samples_per_buffer = (target_scalarisation * new_buffer_size).astype(int)
@@ -262,14 +221,15 @@ class MOManager:
             all_s2.append(s2.cpu().numpy())
             all_d.append(d.cpu().numpy())
             
-            # Store the origin island ID for each sampled transition.
+            # Store the origin island ID for each sampled transition. This is essential
+            # for the finetuner to select the correct in-distribution critic.
             all_origins.append(np.full(num_to_sample, island_id))
 
         if not all_s:
             print("Warning: No samples were collected for the child's buffer.")
             return child
 
-        # Assemble the final static dataset.
+        # Assemble the final static dataset tensors.
         final_states = np.concatenate(all_s, axis=0)
         final_actions = np.concatenate(all_a, axis=0)
         final_rewards = np.concatenate(all_r, axis=0)
@@ -277,7 +237,7 @@ class MOManager:
         final_dones = np.concatenate(all_d, axis=0)
         final_origins = np.concatenate(all_origins, axis=0)
 
-        # Create a new buffer for the child and populate it.
+        # Create and populate a temporary buffer for the child.
         child_buffer = MiniBuffer(
             obs_shape=self.env.observation_space.shape,
             action_type=child.action_type,
@@ -288,9 +248,6 @@ class MOManager:
             final_states, final_actions, final_rewards, final_next_states, final_dones
         )
         child.buffer = child_buffer
-        
-        # Attach the parallel array of origin IDs to the child. This is required
-        # by the finetuner to select the correct critic for each transition.
         child.buffer_origins = final_origins
         
         print(f"Child's buffer created with {len(child.buffer)} total transitions.")
@@ -299,24 +256,10 @@ class MOManager:
     def _mutate_policy(self, child: Actor, mutation_strength: float) -> None:
         """
         Applies Gaussian noise to the parameters of a child's policy network.
-
-        This method iterates through each parameter tensor in the policy and adds
-        noise drawn from a normal distribution (mean=0, std=mutation_strength).
-        The modification is performed in-place.
-
-        Args:
-            child: The actor whose policy network will be mutated.
-            mutation_strength: The standard deviation of the Gaussian noise.
         """
-        # Ensure no gradients are tracked during this operation for efficiency.
         with torch.no_grad():
-            # Iterate over all parameters (weights and biases) in the policy.
             for param in child.policy.parameters():
-                # Create a noise tensor with the same shape and on the same device
-                # as the parameter tensor.
                 noise = torch.randn_like(param) * mutation_strength
-                
-                # Add the generated noise to the parameter tensor in-place.
                 param.add_(noise)
 
     def evolve(self):
@@ -325,21 +268,28 @@ class MOManager:
         """
         print("\n--- Starting MO Generation ---")
         
+        # Evaluate any policies in the population that haven't been evaluated yet.
         eval_env = mo_gym.make(self.glob_cfg['env']['name'])
-        eval_pop([ind for ind in self.population if ind.vector_return is None], eval_env, [0.5,0.5], episodes_per_actor=self.cfg['episodes_per_actor'])
+        global_seed = self.glob_cfg.get("seed", 2024)
+        eval_pop(
+            [ind for ind in self.population if ind.vector_return is None], 
+            eval_env, 
+            [0.5,0.5], 
+            episodes_per_actor=self.cfg['episodes_per_actor'],
+            seed=global_seed + self.generation
+        )
 
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)
 
-        # 1. Parent Selection
+        # 1. Parent Selection: Find the largest gap in the current Pareto front.
         parent_a, parent_b = self._find_gap_and_select_parents(self.population)
         if not (parent_a and parent_b):
             print("Could not select parents. Aborting evolution step.")
             return
-
         print(f"Selected parents with returns: {parent_a.vector_return} <-> {parent_b.vector_return}")
 
-        # 2. Target Calculation
+        # 2. Target Calculation: Define the desired trade-off at the midpoint of the parents.
         evaluated = [p for p in self.population if p.vector_return is not None]
         returns = np.vstack([p.vector_return for p in evaluated])
         mins, maxs = returns.min(axis=0), returns.max(axis=0)
@@ -350,19 +300,17 @@ class MOManager:
         
         midpoint = 0.5 * (norm_a + norm_b)
         target_scalarisation = midpoint / np.sum(midpoint) if np.sum(midpoint) > 1e-8 else np.ones(self.num_objectives) / self.num_objectives
-        # target_scalarisation = np.array([0.9, 0.1])
         print(f"Calculated target weights: {target_scalarisation}")
 
-        # 3. Offspring Creation
+        # 3. Offspring Creation: Generate a new child and its training data.
         child = self._create_offspring(parent_a, parent_b, target_scalarisation)
         
-        # 4. Fine-tuning
+        # 4. Fine-tuning: Use the offline learning process to train the child.
         print("--- Fine-tuning Child Actor ---")
-        self.finetuner.execute(
+        self.finetuner.offline_finetune(
             child=child,
             target_scalarisation=target_scalarisation,
-            critics=self.critics,
-            config=self.cfg['finetune']
+            critics=self.critics
         )
         
         # Add the new, fine-tuned child to the population for the next generation.

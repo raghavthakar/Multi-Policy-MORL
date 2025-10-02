@@ -1,11 +1,10 @@
 # catserl/island/island_manager.py
 from __future__ import annotations
 from typing import List, Dict
-import numpy as np, random, torch
-import hashlib
+import numpy as np, torch
+from collections import deque
 import mo_gymnasium as mo_gym
 import gymnasium as gym
-from collections import deque
 
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import deterministic_rollout
@@ -55,9 +54,7 @@ class IslandManager:
         self.env = env
         self.rl_alg_name = 'td3'
         # -------------------------------------------------------------- #
-        # local deterministic RNG for this island
         self.seed = seed
-        self.rs = np.random.RandomState(seed)
         # -------------------------------------------------------------- #
         self.w = scalar_weight.astype(np.float32)
         self.other_ws = other_scalar_weights
@@ -66,7 +63,7 @@ class IslandManager:
         if isinstance(self.env.action_space, gym.spaces.Discrete):
             self.action_type = "discrete"
             self.action_dim = self.env.action_space.n
-            self.max_action = None # Cannot be retrieved for discrete gym envs
+            self.max_action = None  # Cannot be retrieved for discrete gym envs
         elif isinstance(self.env.action_space, gym.spaces.Box):
             self.action_type = "continuous"
             self.action_dim = self.env.action_space.shape[0]
@@ -86,7 +83,7 @@ class IslandManager:
 
         self.pop = []
 
-        self.total_timesteps = cfg['rl']['total_timesteps']
+        # removed: self.total_timesteps
         self.trained_timesteps = 0
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
 
@@ -97,10 +94,9 @@ class IslandManager:
         # Stats
         self.scalar_returns: deque = deque(maxlen=100)
         self.vector_returns: deque = deque(maxlen=100)
-        self.frames_collected = 0
 
         # Checkpointing variables
-        self.timesteps_between_checkpoints = 200000
+        self.timesteps_between_checkpoints = 50000
         self.checkpointer = checkpointer
 
         # Track training variables
@@ -130,6 +126,39 @@ class IslandManager:
             self.ep_len = ep_len
             self.episodes_completed = episodes_completed
             self.random_action = random_action
+
+    def resume_from_checkpoint(self) -> None:
+        """
+        Restores the island's complete training state from the latest snapshot.
+        
+        This includes the agent's networks, optimizers, the replay buffer,
+        and the manager's training progress counters.
+        """
+        if not self.checkpointer:
+            print(f"[Island {self.island_id}] No checkpointer provided, cannot resume.")
+            return
+
+        # The load method restores the agent and buffer in-place and
+        # returns the manager's state dictionary.
+        manager_state = self.checkpointer.load_latest_island_snapshot(
+            island_id=self.island_id,
+            agent=self.worker.agent,
+            buffer=self.worker.buffer()
+        )
+
+        if manager_state:
+            # manager_state expected to be a dict containing trained_timesteps and training_stats
+            self.trained_timesteps = manager_state.get('trained_timesteps', self.trained_timesteps)
+            # Attempt to restore training_stats object if present
+            if 'training_stats' in manager_state:
+                try:
+                    self._training_stats = manager_state['training_stats']
+                except Exception:
+                    # If direct assignment fails, ignore and continue
+                    pass
+            print(f"[Island {self.island_id}] Resumed training from timestep {self.trained_timesteps}.")
+        else:
+            print(f"[Island {self.island_id}] No checkpoint found, starting from scratch.")
     
     # ---------- get a deterministic evaluation of the policy -----------
     def _eval_policy(self, episodes_per_actor=10):
@@ -162,30 +191,29 @@ class IslandManager:
     # ----------  Warm-up ---------------------------------------------- #
     # ------------------------------------------------------------------ #
     def train(self, steps_to_train=1000) -> Dict:
-        # --- Training Hyperparameters ---
-        total_timesteps = self.total_timesteps
-        # total_timesteps = 25000 #NOTE: Temporary limiting for testing
+        # Use a start-up period to populate the buffer with random actions.
         start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
 
-        # Initalise the persistent variables (and reset the environement the first time)
+        # Initialize environment and training state on the very first step.
         if self.trained_timesteps == 0:
-            self._training_stats.set(self.env.reset()[0], None, 0, 0, True)
+            state, _ = self.env.reset(seed=self.seed)
+            self._training_stats.set(state, None, 0, 0, True)
 
         # --- Training Loop ---
-        for t in range(self.trained_timesteps, self.trained_timesteps+steps_to_train):
-            # Init local variables
+        for _ in range(steps_to_train):
             state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
             
-            # Select action: random for the start period, otherwise from the policy
-            if self.trained_timesteps >= start_timesteps:
-                random_action = False
-            action = self.worker.act(state, random_action=random_action)
+            # Use random actions for the start-up period, otherwise use the policy.
+            if self.trained_timesteps < start_timesteps:
+                action = self.worker.act(state, random_action=True)
+            else:
+                action = self.worker.act(state, noisy_action=True)
 
             # Step the environment
             next_state, reward_vec, done, trunc, _ = self.env.step(action)
             
             # Store the transition in the agent's buffer
-            self.worker.remember(state, action, reward_vec, next_state, done or trunc)
+            self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
 
             # Accumulate episode rewards
             if ep_return_vec is None:
@@ -197,32 +225,30 @@ class IslandManager:
             ep_len += 1
 
             # Perform learning updates
-            if t >= start_timesteps and t % self.update_every_n_steps == 0:
+            if self.trained_timesteps >= start_timesteps and self.trained_timesteps % self.update_every_n_steps == 0:
                 for _ in range(self.updates_per_session):
                     self.worker.update()
             
-            # Checkpoint if it's time
-            if t > 0 and t % self.timesteps_between_checkpoints == 0 and self.checkpointer is not None:
-                pop, island_id, critic, buff, weight = self.export_island()
-                self.checkpointer.save_island(population=pop, 
-                                              critic=critic, 
-                                              buffer=buff, 
-                                              weights=weight, 
-                                              cfg=self.cfg, 
-                                              seed=self.seed, 
-                                              island_id=island_id, 
-                                              timestep=t)
+            self.trained_timesteps += 1
+
+            # Save a resume snapshot periodically.
+            if self.trained_timesteps > 0 and self.trained_timesteps % self.timesteps_between_checkpoints == 0 and self.checkpointer:
+                manager_state = {
+                    'trained_timesteps': self.trained_timesteps,
+                    'training_stats': self._training_stats
+                }
+                self.checkpointer.save_island_snapshot(
+                    agent=self.worker.agent,
+                    buffer=self.worker.buffer(),
+                    manager_state=manager_state,
+                    island_id=self.island_id
+                )
 
             # Handle episode termination
             if done or trunc:
-                # Log episode results
                 scalar_return = (ep_return_vec * self.w).sum()
-                print(f"Total Steps: {t+1}, Episode: {episodes_completed+1}, Ep. Length: {ep_len}, Scalar Return: {scalar_return:.2f}")
-
-                # if t >= start_timesteps and t % self.update_every_n_steps == 0:
-                #     self._eval_policy()
+                print(f"[Island {self.island_id}] Steps: {self.trained_timesteps}, Ep: {episodes_completed+1}, Len: {ep_len}, Return: {scalar_return:.2f}")
                 
-                # Store metrics in the manager
                 self.scalar_returns.append(scalar_return)
                 self.vector_returns.append(ep_return_vec)
                 
@@ -234,9 +260,6 @@ class IslandManager:
             
             # Update persistent variables
             self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
-
-            # Update the trained timesteps tracker
-            self.trained_timesteps += 1
         
         return self.trained_timesteps
 

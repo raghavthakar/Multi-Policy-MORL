@@ -14,6 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CATSERL Orchestrator", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML config file.")
     parser.add_argument("--save-data-dir", type=Path, default=None, help="If set, save checkpoint files to this folder.")
+    parser.add_argument("--resume-stage1", action='store_true', default=False, help="If set, resume Stage 1 island training from a checkpoint (from --save-data-dir).")
     parser.add_argument("--resume-stage2", action='store_true', default=False, help="If set, skip island training and load a merged checkpoint (from --save-data-dir) to start Stage 2.")
 
     args = parser.parse_args(argv)
@@ -74,29 +75,43 @@ def main(argv: list[str] | None = None) -> int:
         mgr0 = IslandManager(env1, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
         mgr1 = IslandManager(env2, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
 
-        t = [0, 0] # track the trained timeseteps on each objective
-        save_merged_pops_every = 200000
-        num_checkpts = 0 # track how many times merged populations have been checkpointed
+        # If the resume flag is set, load the state for each manager.
+        if args.resume_stage1:
+            print("\n--- Resuming Stage 1 Training from Checkpoints ---")
+            if ckpt:
+                mgr0.resume_from_checkpoint()
+                mgr1.resume_from_checkpoint()
+            else:
+                print("WARNING: --resume-stage1 flag set, but no checkpoint directory provided. Starting from scratch.")
+        
+        # Initialize timestep tracker *after* potential resume.
+        t = [mgr0.trained_timesteps, mgr1.trained_timesteps]
+        save_merged_pops_every = 60000
+        num_checkpts = sum(t) // save_merged_pops_every
         total_timesteps = cfg['rl']['total_timesteps']
         
-        # iterate over training steps
-        while sum(t) < total_timesteps:
-            t = [mgr0.train(1000), mgr1.train(1000)]
+        # The training loop now correctly starts from the resumed timestep.
+        while t[0] < total_timesteps or t[1] < total_timesteps:
+            # Only train managers that haven't finished.
+            if mgr0.trained_timesteps < total_timesteps:
+                mgr0.train(1000)
+            if mgr1.trained_timesteps < total_timesteps:
+                mgr1.train(1000)
             
-            if int(sum(t) / save_merged_pops_every) > int(num_checkpts):
-                num_checkpts += 1
+            t = [mgr0.trained_timesteps, mgr1.trained_timesteps]
+            
+            # Periodically save a merged checkpoint for Stage 2.
+            current_total_steps = sum(t)
+            if (current_total_steps // save_merged_pops_every) > num_checkpts:
+                num_checkpts = (current_total_steps // save_merged_pops_every)
                 # Save the merged state for Stage 2.
-                if args.save_data_dir is not None:
+                if ckpt:
                     try:
                         # Merge islands for potential Stage 2.
                         pop0, id0, critic0, buffer0, w0 = mgr0.export_island()
                         pop1, id1, critic1, buffer1, w1 = mgr1.export_island()
-                        combined_pop = pop0 + pop1
-                        critics_dict = {id0: critic0, id1: critic1}
-                        weights_by_island = {id0: w0, id1: w1}
-                        buffers_by_island = {id0: buffer0, id1:buffer1}
-
-                        ckpt.save_merged(combined_pop, critics_dict, buffers_by_island, weights_by_island, cfg, seed, timestep=t)
+                        ckpt.save_merged(pop0 + pop1, {id0: critic0, id1: critic1}, 
+                                         {id0: buffer0, id1:buffer1}, {id0: w0, id1: w1}, cfg, seed, timestep=t)
                         print(f"Saved merged checkpoint to: {args.save_data_dir}")
                     except Exception as e:
                         print(f"WARNING: Failed to save merged checkpoint: {e}", file=sys.stderr)

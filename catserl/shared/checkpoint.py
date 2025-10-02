@@ -1,4 +1,3 @@
-# checkpoint.py
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
@@ -9,15 +8,18 @@ import numpy as np
 
 from catserl.shared.actors import Actor
 from catserl.shared.buffers import ReplayBuffer
+from catserl.shared.rl import TD3  # Assuming TD3 is the agent type
 
 class Checkpoint:
     """Handles saving and loading the merged population and critics for Stage 2."""
 
-    VERSION = 1
+    VERSION = 2  # Incremented version for new checkpoint format
     MERGED_POPS_FILENAME = 'merged_populations.dat'
+    SNAPSHOT_FILENAME_TEMPLATE = 'island_{island_id}_t{timestep}.ckpt'
 
     def __init__(self, path: Path | str):
         self.path = Path(path)
+        self.path.mkdir(parents=True, exist_ok=True)
         # legacy single-file path (kept for backward compatibility)
         self.file_path = self.path / self.MERGED_POPS_FILENAME    # actual checkpoint file (legacy)
         # pattern components
@@ -25,100 +27,96 @@ class Checkpoint:
         self._merged_suffix = Path(self.MERGED_POPS_FILENAME).suffix  # includes the leading dot, e.g. '.dat'
 
     @torch.no_grad()
-    def save_island(
+    def save_island_snapshot(
         self,
-        population: List[Actor],
-        critic: torch.nn.Module,
+        agent: TD3,
         buffer: ReplayBuffer,
-        weights: np.ndarray,
-        cfg: Dict[str, Any],
-        seed: int,
-        island_id: int,
-        timestep: int = 0
+        manager_state: Dict,
+        island_id: int
     ) -> None:
         """
-        Save the checkpoint for a single island so training can be resumed later.
-        Stores:
-          - the island's GA population (actors as flat params + minibuffer state),
-          - the island's critic,
-          - the island's large ReplayBuffer,
-          - the island's scalarisation weights,
-          - seed and cfg for reproducibility.
+        Saves a complete snapshot of an island's training state.
 
-        The file is written as <checkpoint_dir>/island_{island_id}_t{timestep}.dat.
+        This includes the full agent state (networks, optimizers), the replay
+        buffer, and the manager's progress trackers, allowing a Stage 1 run
+        to be perfectly resumed.
         """
-        # Ensure directory exists
-        if not self.path.exists():
-            self.path.mkdir(parents=True, exist_ok=True)
+        timestep = manager_state.get('trained_timesteps', 0)
 
-        # ---- Serialize actors (population) ----
-        actors_blob: List[Dict[str, Any]] = []
-        for actor in population:
-            actors_blob.append({
-                "kind": actor.kind,
-                "pop_id": actor.pop_id,
-                "obs_shape": actor.obs_shape,
-                "action_type": actor.action_type,
-                "action_dim": actor.action_dim,
-                "hidden_dim": actor.hidden_dim,
-                "max_action": actor.max_action,
-                "flat": actor.flat_params().cpu(),
-                # MiniBuffer state inside each Actor (small on-policy-ish buffer)
-                "buffer": {
-                    "states": actor.buffer.states,
-                    "actions": actor.buffer.actions,
-                    "rewards": actor.buffer.rewards,
-                    "next_states": actor.buffer.next_states,
-                    "dones": actor.buffer.dones,
-                    "ptr": actor.buffer.ptr,
-                    "max_steps": actor.buffer.max_steps,
-                },
-            })
-
-        # ---- Serialize the island critic ----
-        critics_blob = {str(island_id): critic.cpu()}
-
-        # ---- Serialize the island's scalarisation weights ----
-        weights_blob = {str(island_id): weights.tolist()}
-
-        # ---- Serialize the island's large ReplayBuffer (+ metadata for reconstruction) ----
-        # Extract transitions from the ring buffer storage
+        # Serialize the ReplayBuffer's content.
         transitions = list(buffer._storage)
         if not transitions:
             states, actions, rewards, next_states, dones = [], [], [], [], []
         else:
             states, actions, rewards, next_states, dones = map(np.stack, zip(*transitions))
 
-        buffers_blob = {
-            str(island_id): {
-                "states": states,
-                "actions": actions,
-                "rewards": rewards,
-                "next_states": next_states,
-                "dones": dones,
-                "capacity": buffer.capacity,
-                # metadata required to rebuild a ReplayBuffer on load
-                "obs_shape": buffer.obs_shape,
-                "action_type": buffer.action_type,
-                "action_dim": buffer.action_dim,
-            }
+        buffer_state = {
+            "states": states, "actions": actions, "rewards": rewards,
+            "next_states": next_states, "dones": dones
         }
 
+        # The payload contains all necessary components for a full resume.
         payload = {
             "version": self.VERSION,
-            "meta": {"seed": seed, "cfg": cfg, "island_id": island_id, "timestep": int(timestep)},
-            "actors": actors_blob,
-            "critics": critics_blob,
-            "weights": weights_blob,
-            "island_buffers": buffers_blob,
+            "agent_state": agent.save_state(),
+            "buffer_state": buffer_state,
+            "manager_state": manager_state,
         }
 
-        # Write atomically to an island-specific file
-        island_file = self.path / f"island_{island_id}_t{int(timestep)}.dat"
-        tmp_path = island_file.with_name(island_file.name + ".tmp")
+        filename = self.SNAPSHOT_FILENAME_TEMPLATE.format(island_id=island_id, timestep=timestep)
+        filepath = self.path / filename
+        tmp_path = filepath.with_name(filepath.name + ".tmp")
         torch.save(payload, tmp_path)
-        tmp_path.replace(island_file)
-    
+        tmp_path.rename(filepath)
+        print(f"[Checkpoint] Saved island {island_id} snapshot at timestep {timestep}.")
+
+    @torch.no_grad()
+    def load_latest_island_snapshot(self, island_id: int, agent: TD3, buffer: ReplayBuffer) -> Optional[Dict]:
+        """
+        Finds and loads the latest training snapshot for a given island.
+
+        Restores the state of the provided agent and buffer in-place.
+
+        Returns:
+            The loaded manager_state dictionary if a checkpoint is found,
+            otherwise None.
+        """
+        pattern = re.compile(f"island_{island_id}_t(\\d+)\\.ckpt$")
+        matches = {}
+        for p in self.path.iterdir():
+            if not p.is_file():
+                continue
+            m = pattern.search(p.name)
+            if m:
+                matches[int(m.group(1))] = p
+
+        if not matches:
+            print(f"[Checkpoint] No snapshot found for island {island_id}.")
+            return None
+
+        latest_timestep = max(matches.keys())
+        latest_ckpt_path = matches[latest_timestep]
+        print(f"[Checkpoint] Loading latest snapshot for island {island_id} from: {latest_ckpt_path}")
+
+        payload = torch.load(latest_ckpt_path, map_location=agent.device, weights_only=False)
+
+        # Restore the state of the agent and buffer.
+        agent.load_state(payload['agent_state'])
+
+        buffer_state = payload['buffer_state']
+        # Clear existing buffer storage and re-push transitions
+        buffer._storage.clear()
+        for i in range(len(buffer_state['states'])):
+            buffer.push(
+                buffer_state['states'][i],
+                buffer_state['actions'][i],
+                buffer_state['rewards'][i],
+                buffer_state['next_states'][i],
+                buffer_state['dones'][i]
+            )
+
+        return payload['manager_state']
+
     @torch.no_grad()
     def save_merged(
         self,
@@ -173,7 +171,7 @@ class Checkpoint:
 
         critics_blob = {str(k): v.cpu() for k, v in critics_by_island.items()}
         weights_blob = {str(k): v.tolist() for k, v in weights_by_island.items()}
-        
+
         buffers_blob = {}
         for island_id, buffer in buffers_by_island.items():
             transitions = list(buffer._storage)
@@ -272,7 +270,7 @@ class Checkpoint:
 
         if payload.get("version") != self.VERSION:
             raise RuntimeError(f"Checkpoint version mismatch: expected {self.VERSION}")
-        
+
         print(f"[Checkpoinit] Loaded data fle: {file_to_load}")
 
         # --- Load Actors (unchanged) ---
@@ -322,7 +320,7 @@ class Checkpoint:
             # 3. Re-populate the buffer by pushing each saved transition
             for i in range(len(states)):
                 new_buffer.push(states[i], actions[i], rewards[i], next_states[i], dones[i])
-            
+
             buffers_by_island[int(island_id_str)] = new_buffer
 
         critics = {int(k): v.to(device) for k, v in payload["critics"].items()}

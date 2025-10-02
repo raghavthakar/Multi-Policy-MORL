@@ -16,7 +16,7 @@ Add new algorithms by:
 No global registry or separate packages are required.
 """
 
-from typing import Tuple
+from typing import Tuple, Dict
 import copy
 
 import numpy as np
@@ -51,10 +51,10 @@ class Algo:  # noqa: D101 – doctring would just repeat the method names
 	def update(self) -> None:  # noqa: D401 – imperative mood
 		raise NotImplementedError
 
-	def save(self, path: str) -> None:  # noqa: D401 – imperative mood
+	def save_state(self) -> Dict:
 		raise NotImplementedError
 
-	def load(self, path: str) -> None:  # noqa: D401 – imperative mood
+	def load_state(self, state_dict: Dict) -> None:
 		raise NotImplementedError
 
 from catserl.shared.buffers import ReplayBuffer  # isort: skip  (project import)
@@ -282,24 +282,34 @@ class TD3(Algo): # Inherit from Algo
 		return self.buffer
 
 	# MODIFIED: Add save/load methods to satisfy the Algo interface
-	def save(self, path: str) -> None:
-		torch.save({
+	def save_state(self) -> Dict:
+		"""
+		Exports the complete state of the agent to a dictionary.
+
+		This includes network weights, optimizer states, and training progress,
+		which is essential for correctly resuming training.
+		"""
+		return {
 			'actor': self.actor.state_dict(),
 			'critic': self.critic.state_dict(),
 			'actor_optimizer': self.actor_optimizer.state_dict(),
 			'critic_optimizer': self.critic_optimizer.state_dict(),
-			'total_it': self.total_it
-		}, path)
+			'total_it': self.total_it,
+			'frames_idx': self.frames_idx
+		}
 
-	def load(self, path: str) -> None:
-		checkpoint = torch.load(path, map_location=self.device)
-		self.actor.load_state_dict(checkpoint['actor'])
+	def load_state(self, state_dict: Dict) -> None:
+		"""
+		Restores the agent's state from a dictionary.
+		"""
+		self.actor.load_state_dict(state_dict['actor'])
 		self.actor_target = copy.deepcopy(self.actor)
-		self.critic.load_state_dict(checkpoint['critic'])
+		self.critic.load_state_dict(state_dict['critic'])
 		self.critic_target = copy.deepcopy(self.critic)
-		self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
-		self.critic_optimizer.load_state_dict(checkpoint['critic_optimizer'])
-		self.total_it = checkpoint['total_it']
+		self.actor_optimizer.load_state_dict(state_dict['actor_optimizer'])
+		self.critic_optimizer.load_state_dict(state_dict['critic_optimizer'])
+		self.total_it = state_dict['total_it']
+		self.frames_idx = state_dict['frames_idx']
 
 # -----------------------------------------------------------------------------
 # RLWorker – orchestration shell that delegates to a chosen algorithm class
@@ -350,11 +360,13 @@ class RLWorker:
 	def update(self) -> None:  # noqa: D401 – imperative mood
 		self.agent.update(self.main_scalar_weight, self.other_scalar_weights)
 
-	def save(self, path: str) -> None:  # noqa: D401 – imperative mood
-		self.agent.save(path)
+	def save_state(self) -> Dict:
+		"""Pass-through method to get the agent's state dictionary."""
+		return self.agent.save_state()
 
-	def load(self, path: str) -> None:  # noqa: D401 – imperative mood
-		self.agent.load(path)
+	def load_state(self, state_dict: Dict) -> None:
+		"""Pass-through method to load the agent's state from a dictionary."""
+		self.agent.load_state(state_dict)
 
 	def export_policy_params(self):  # noqa: D401 – imperative mood
 		return getattr(self.agent, "export_policy_params", None)()

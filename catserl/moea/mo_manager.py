@@ -348,7 +348,8 @@ class MOManager:
             eval_env, 
             [0.5,0.5], 
             episodes_per_actor=self.cfg['episodes_per_actor'],
-            seed=global_seed + self.generation
+            seed=global_seed + self.generation,
+            max_ep_len=750,
         )
 
         self.generation += 1

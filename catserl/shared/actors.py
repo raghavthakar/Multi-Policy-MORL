@@ -10,59 +10,6 @@ from catserl.shared.policies import DiscretePolicy, ContinuousPolicy
 from catserl.shared.buffers import MiniBuffer
 
 
-class _DQNActorImpl:
-	"""DQN-specific implementation: a policy network and a replay buffer."""
-
-	def __init__(
-		self,
-		obs_shape: Tuple[int, ...],
-		action_type: str,
-		action_dim: int,
-		hidden_dim: int,
-		buffer_size: int,
-		device: torch.device,
-	) -> None:
-		if action_type != "discrete":
-			raise ValueError("DQNActorImpl only supports 'discrete' action spaces.")
-
-		self.obs_shape = obs_shape
-		self.action_type = action_type
-		self.action_dim = action_dim
-		self.hidden_dim = hidden_dim
-		self.device = device
-
-		self.net = DiscretePolicy(obs_shape, action_dim, hidden_dim).to(self.device)
-		self.buffer = MiniBuffer(
-			obs_shape,
-			action_type,
-			action_dim,
-			max_steps=buffer_size
-		)
-
-	@torch.no_grad()
-	def act(self, state: np.ndarray) -> int:
-		"""Returns the best action according to the policy network."""
-		state_tensor = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-		return int(self.net(state_tensor).argmax(1).item())
-
-	def remember(self, state, action, r_vec, next_state, done):
-		"""Adds a transition to the replay buffer."""
-		self.buffer.add(state, action, r_vec, next_state, done)
-
-	def flat_params(self) -> torch.Tensor:
-		"""Flattens all network parameters into a single tensor."""
-		return torch.cat([p.data.view(-1) for p in self.net.parameters()])
-
-	def load_flat_params(self, flat: torch.Tensor) -> None:
-		"""Loads flattened parameters into the network."""
-		idx = 0
-		for p in self.net.parameters():
-			n = p.numel()
-			p.data.copy_(flat[idx : idx + n].view_as(p))
-			idx += n
-
-
-# --- NEW TD3 IMPLEMENTATION CLASS ---
 class _TD3ActorImpl:
 	"""TD3-specific implementation: a continuous policy and a replay buffer."""
 
@@ -146,19 +93,8 @@ class Actor:
 		
 		self.action_type = action_type
 		self.action_dim = action_dim
-
-		# MODIFIED: Add logic for TD3 actor creation
-		if self.kind == "dqn":
-			self._impl = _DQNActorImpl(
-				obs_shape,
-				action_type,
-				action_dim,
-				hidden_dim=hidden_dim,
-				max_action=max_action,
-				buffer_size=buffer_size,
-				device=torch.device(device),
-			)
-		elif self.kind == "td3":
+		
+		if self.kind == "td3":
 			self._impl = _TD3ActorImpl(
 				obs_shape,
 				action_type,
@@ -173,7 +109,7 @@ class Actor:
 	# --- Properties to provide clean access to implementation details ---
 	@property
 	# MODIFIED: Updated type hint for policy
-	def policy(self) -> Union[DiscretePolicy, ContinuousPolicy]:
+	def policy(self) -> ContinuousPolicy:
 		return self._impl.net
 
 	@property
@@ -190,8 +126,6 @@ class Actor:
 
 	@property
 	def n_actions(self) -> int:
-		if self.action_type != "discrete":
-			raise AttributeError("'.n_actions' is only available for discrete action spaces.")
 		return self.action_dim
 	
 	# MODIFIED: Added properties for hidden_dim and max_action

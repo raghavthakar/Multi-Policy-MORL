@@ -173,7 +173,8 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
                 # and the buffer action, scaled by the AWR weight.
                 mu = child.policy(s_batch)
                 mse_loss = ((mu - a_batch) ** 2).sum(dim=1)
-                loss = (awr_weights * mse_loss).mean()
+                # loss = (awr_weights * mse_loss).mean()
+                loss = mse_loss.mean()
 
                 optimizer.zero_grad()
                 loss.backward()

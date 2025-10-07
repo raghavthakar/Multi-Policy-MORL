@@ -352,6 +352,10 @@ class MOManager:
             max_ep_len=750,
         )
 
+        # Print out the population's fitnesses.
+        for i, ind in enumerate(self.population):
+            print(f"  Actor {i} [ID: {ind.pop_id}] - Return: {ind.vector_return}, Fitness: {ind.fitness}")
+
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)
 

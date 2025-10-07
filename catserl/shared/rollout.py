@@ -20,7 +20,7 @@ def deterministic_rollout(env, actor, store_transitions: bool = True, max_ep_len
     Parameters
     ----------
     env : environment instance
-    actor : Genetic/DQN actor that is being rolled out
+    actor : Genetic/RLAlgo actor that is being rolled out
     store_transitions : bool, optional
         Whether to store transitions into actor's buffer (default: True)
     max_ep_len : int, optional

@@ -6,7 +6,7 @@ This module keeps **all** algorithm logic in one file while allowing you to
 swap RL algorithms by passing a string (e.g. "dqn", "ppo") to ``RLWorker``.
 
 The only abstraction is a tiny *duck‑typed* ``Algo`` base class that defines
-five methods.  Each concrete algorithm class (``DQN`` below) implements those
+five methods.  Each concrete algorithm class implements those
 methods so the worker can delegate to it.
 
 Add new algorithms by:

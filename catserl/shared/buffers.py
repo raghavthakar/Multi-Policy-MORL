@@ -25,7 +25,7 @@ class Transition(tuple):
 
 class ReplayBuffer:
     """
-    Large FIFO buffer for RL workers (DQN).  Fixed size, uniform sampling.
+    Large FIFO buffer for RL workers.  Fixed size, uniform sampling.
     """
 
     def __init__(self,

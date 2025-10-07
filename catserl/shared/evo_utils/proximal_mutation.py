@@ -1,73 +1,84 @@
-# ==================== catserl/pderl/proximal_mutation.py ====================
-"""
-Proximal-safe mutation (PDERL, Eq. 4)
-
-θ' = θ + (1 / ‖J‖) · ε ,     ε ~ N(0, σ² I)
-
-where  J = ∂Q(s, πθ(s)) / ∂θ   averaged over a mini-batch of states.
-"""
-
+# catserl/pderl/proximal_mutation.py
 from __future__ import annotations
 from typing import List
-import torch, numpy as np
-from catserl.shared.actors import DQNActor
+import torch
+import numpy as np
 
+from catserl.shared.actors import Actor
 
-# --------------------------------------------------------------------------- #
-# helper: ‖J‖_2  (batch-averaged)
-# --------------------------------------------------------------------------- #
-def _jacobian_norm(actor: DQNActor,
-                   critic: torch.nn.Module,
-                   states: torch.Tensor) -> torch.Tensor:
+def _get_q_value_gradient_norm(
+    actor: Actor,
+    critic: torch.nn.Module,
+    states: torch.Tensor,
+    scalar_weight: torch.Tensor
+) -> torch.Tensor:
     """
-    L2 norm of gradient of the critic value w.r.t actor parameters,
-    average over the batch in accordance with the PDERL reference repo.
+    Computes the L2 norm of the gradient of the critic's Q-value with
+    respect to the actor's parameters. This measures the sensitivity
+    of the Q-function to changes in the policy.
     """
-    logits = actor.net(states)
-    probs  = torch.softmax(logits / 0.1, dim=1)      # τ = 0.1
-    q_all  = critic(states)                          # [B, |A|]
-    q      = (probs * q_all).sum(dim=1).mean()       # scalar
+    # Get the deterministic action from the actor for the given states.
+    actions = actor.policy(states)
+    
+    # Condition the state with the actor's primary objective weight.
+    weight_batch = scalar_weight.expand(states.shape[0], -1)
+    state_conditioned = torch.cat([states, weight_batch], 1)
+    
+    # Get the Q-value from the critic for the actor's current actions.
+    q_value = critic.Q1(state_conditioned, actions)
+    
+    # Average the Q-values to get a single scalar for backpropagation.
+    q_scalar = q_value.mean()
 
-    grads = torch.autograd.grad(q,
-                                actor.net.parameters(),
-                                retain_graph=False,
-                                create_graph=False)
+    # Compute the gradient of this scalar Q-value w.r.t. the actor's parameters.
+    grads = torch.autograd.grad(
+        q_scalar,
+        actor.policy.parameters(),
+        retain_graph=False,
+        create_graph=False
+    )
 
-    total = torch.tensor(0.0, device=states.device)
+    # Compute the total L2 norm of the gradient across all parameter tensors.
+    total_norm = torch.tensor(0.0, device=states.device)
     for g in grads:
-        total += (g ** 2).sum()
-    return torch.sqrt(total) + 1e-8                      # avoid div-by-0
+        total_norm += (g ** 2).sum()
+        
+    return torch.sqrt(total_norm) + 1e-8 # Add epsilon to avoid division by zero.
 
 
-# --------------------------------------------------------------------------- #
-# main API
-# --------------------------------------------------------------------------- #
-def proximal_mutate(pop: List[DQNActor],
-                    critic: torch.nn.Module,
-                    sigma: float = 0.02,
-                    batch_size: int = 32,
-                    clamp_std: float = 0.1) -> None:
+def proximal_mutate(
+    pop: List[Actor],
+    critic: torch.nn.Module,
+    main_scalar_weight: np.ndarray,
+    sigma: float = 0.1,
+    batch_size: int = 256
+) -> None:
     """
-    Mutate each GeneticActor in `pop` in place.
+    Mutates each actor in the population in-place using proximal mutation.
 
-    Parameters
-    ----------
-    sigma       : std of isotropic noise ε before scaling.
-    batch_size  : #states drawn from actor's MiniBuffer to estimate ‖J‖.
-    clamp_std   : upper bound on 1/‖J‖ so steps never exceed `clamp_std·σ`.
+    This method adds Gaussian noise to the policy parameters, scaled by the
+    inverse of the Q-function's sensitivity to parameter changes. This ensures
+    the mutation causes a controlled, non-destructive change in behavior.
     """
+    device = critic.l1.weight.device # A way to get the device
+    weight_tensor = torch.from_numpy(main_scalar_weight).float().to(device)
+
     for actor in pop:
-        if len(actor.buffer) == 0:
-            continue                                    # no data yet
+        if len(actor.buffer) < batch_size:
+            continue # Not enough data in the actor's personal buffer.
 
-        bs = min(batch_size, len(actor.buffer))
-        states, _ = actor.buffer.sample(bs, device=actor.device)
-        states.requires_grad_(True)
+        # Sample states from the actor's own recent experiences.
+        states, _ = actor.buffer.sample(batch_size, device=device)
 
-        jac_norm = _jacobian_norm(actor, critic, states)         # scalar
-        scale    = torch.clamp(1.0 / jac_norm, max=clamp_std)    # Eq.(4)
+        # Calculate the gradient norm (sensitivity).
+        grad_norm = _get_q_value_gradient_norm(actor, critic, states, weight_tensor)
+        
+        # The mutation scale is inversely proportional to the sensitivity.
+        scale = 1.0 / grad_norm
 
-        # ε ~ N(0, σ² I)
-        noise = torch.randn_like(actor.flat_params()) * sigma
-        new_params = actor.flat_params() + scale * noise
-        actor.load_flat_params(new_params)
+        with torch.no_grad():
+            # Add scaled Gaussian noise to the actor's flattened parameters.
+            flat_params = actor.flat_params()
+            noise = torch.randn_like(flat_params) * sigma
+            new_params = flat_params + scale * noise
+            actor.load_flat_params(new_params)

@@ -1,113 +1,123 @@
-# ==================== catserl/pderl/crossover.py ====================
+# catserl/pderl/crossover.py
 from __future__ import annotations
 from typing import Dict
-import torch, numpy as np
+import torch
+import numpy as np
 import torch.nn.functional as F
 
-from catserl.shared.actors import DQNActor
+from catserl.shared.actors import Actor
 
-def fill_child_buffer_from_parents(child, parent1, parent2):
+def fill_child_buffer_from_parents(child: Actor, parent1: Actor, parent2: Actor):
     """
-    Fill child's MiniBuffer with the latest transitions from both parents, in equal proportions.
-    """
-    buf_size = child.buffer.max_steps
-    n1 = min(len(parent1.buffer), buf_size // 2)
-    n2 = min(len(parent2.buffer), buf_size - n1)
+    Fills a child's buffer with recent transitions from its parents.
 
-    def get_latest_states_actions(parent, n):
+    The child's buffer is populated with an equal proportion of the most
+    recent experiences from each parent's personal buffer ("genetic memory").
+    """
+    child_buf_size = child.buffer.max_steps
+    num_from_p1 = min(len(parent1.buffer), child_buf_size // 2)
+    num_from_p2 = min(len(parent2.buffer), child_buf_size - num_from_p1)
+
+    # Helper to efficiently extract the last N transitions from a MiniBuffer.
+    def get_latest_transitions(parent: Actor, n: int):
         buf = parent.buffer
-        length = len(buf)
-        if length == 0 or n == 0:
-            return np.empty((0, *buf.states.shape[1:]), dtype=buf.states.dtype), np.empty((0,), dtype=buf.actions.dtype)
-        if buf.full:
-            # Circular buffer: latest n are from (ptr-n)%max_steps to ptr-1
-            idxs = (np.arange(buf.ptr - n, buf.ptr) % buf.max_steps)
-            return buf.states[idxs], buf.actions[idxs]
+        if n == 0:
+            return None
+        
+        # Determine indices for the last n transitions in the circular buffer.
+        end_idx = buf.ptr
+        start_idx = end_idx - n
+        if start_idx < 0:
+            idxs = np.concatenate([np.arange(start_idx + buf.max_steps, buf.max_steps), np.arange(end_idx)])
         else:
-            return buf.states[max(0, length - n):length], buf.actions[max(0, length - n):length]
+            idxs = np.arange(start_idx, end_idx)
+        
+        return (
+            buf.states[idxs], buf.actions[idxs], buf.rewards[idxs],
+            buf.next_states[idxs], buf.dones[idxs]
+        )
 
-    # Get latest transitions
-    s1, a1 = get_latest_states_actions(parent1, n1)
-    s2, a2 = get_latest_states_actions(parent2, n2)
+    # Collect transitions and add them to the child's buffer in one batch.
+    p1_data = get_latest_transitions(parent1, num_from_p1)
+    p2_data = get_latest_transitions(parent2, num_from_p2)
+    
+    all_data = []
+    if p1_data: all_data.append(p1_data)
+    if p2_data: all_data.append(p2_data)
 
-    # Concatenate
-    states = np.concatenate([s1, s2], axis=0)
-    actions = np.concatenate([a1, a2], axis=0)
+    if all_data:
+        s, a, r, s2, d = [np.concatenate(item) for item in zip(*all_data)]
+        child.buffer.add_batch(s, a, r, s2, d)
 
-    # Reset child's buffer
-    child.buffer.ptr = 0
-    child.buffer.full = False
 
-    # Add transitions to child's buffer
-    for s, a in zip(states, actions):
-        child.buffer.add(s, a)
-
-def distilled_crossover(parent1: DQNActor,
-                        parent2: DQNActor,
-                        critic: torch.nn.Module,
-                        cfg: Dict,
-                        device: torch.device | str = "cpu") -> DQNActor:
+def distilled_crossover(
+    parent1: Actor,
+    parent2: Actor,
+    critic: torch.nn.Module,
+    main_scalar_weight: np.ndarray,
+    cfg: Dict,
+    device: torch.device
+) -> Actor:
     """
-    Implementation of Algorithm 1 (PDERL).
+    Performs Q-filtered distillation crossover for continuous (TD3) policies.
 
-    Parameters
-    ----------
-    parent1 / parent2 : GeneticActor
-    critic            : DuelingQNet (frozen)
-    cfg               : expects keys { bc_epochs, bc_batch, crossover_lr }
-    device            : where the child network will live
-
-    Returns
-    -------
-    child : GeneticActor
+    A new child policy is trained to imitate the actions of its parents.
+    For each state, the "target" action is the one from the parent that the
+    provided critic estimates to have a higher Q-value. The child is trained
+    via regression (MSE loss) to mimic this superior behavior.
     """
-    device = torch.device(device)
-    bc_epochs = int(cfg.get("bc_epochs", 1))
-    bc_batch  = int(cfg.get("bc_batch", 256))
-    lr        = float(cfg.get("crossover_lr", 1e-3))
+    bc_epochs = int(cfg.get("crossover_epochs", 12))
+    bc_batch_size = int(cfg.get("crossover_batch_size", 128))
+    lr = float(cfg.get("crossover_lr", 1e-3))
 
-    # ---------------------------------------------------------------
-    # 1. Pick fitter parent as initial genome
-    # ---------------------------------------------------------------
+    # Initialize the child by cloning the fitter parent's policy.
     p1_fit = parent1.fitness if parent1.fitness is not None else -np.inf
     p2_fit = parent2.fitness if parent2.fitness is not None else -np.inf
-    fitter, other = (parent1, parent2) if p1_fit >= p2_fit else (parent2, parent1)
+    fitter_parent = parent1 if p1_fit >= p2_fit else parent2
+    child = fitter_parent.clone()
+    child.policy.to(device)
+    
+    # Prepare parent policies and critic for evaluation.
+    parent1.policy.to(device).eval()
+    parent2.policy.to(device).eval()
+    critic.to(device).eval()
 
-    child = fitter.clone()          # deep copy of policy + buffer
-    child.net.to(device)
-    critic = critic.to(device).eval()
-
-    # Fill child's buffer with latest transitions from both parents
+    # Create the mixed dataset for the child.
     fill_child_buffer_from_parents(child, parent1, parent2)
-    child.buffer.shuffle()
+    if len(child.buffer) < bc_batch_size:
+        return child # Not enough data to train.
 
-    opt = torch.optim.Adam(child.net.parameters(), lr=lr)
+    optimizer = torch.optim.Adam(child.policy.parameters(), lr=lr)
+    
+    # Prepare the scalarization weight for conditioning the critic.
+    weight_tensor = torch.from_numpy(main_scalar_weight).float().to(device)
 
-    # ---------------------------------------------------------------
-    # 2. Behaviour-cloning loop
-    # ---------------------------------------------------------------
+    # Behavior cloning loop to distill parent knowledge.
     for _ in range(bc_epochs):
-        # Sample a batch from the child's own buffer
-        if len(child.buffer) < bc_batch:
-            # Not enough samples, skip this epoch
-            continue
-        states, _ = child.buffer.sample(bc_batch, device)
-
-        # greedy actions of both parents
+        states, _ = child.buffer.sample(bc_batch_size, device=device)
+        
         with torch.no_grad():
-            a1 = parent1.net(states).argmax(dim=1)        # [B]
-            a2 = parent2.net(states).argmax(dim=1)
-            q   = critic(states)                          # [B,|A|]
-            q1  = q.gather(1, a1.unsqueeze(1)).squeeze(1)
-            q2  = q.gather(1, a2.unsqueeze(1)).squeeze(1)
-            target_act = torch.where(q1 >= q2, a1, a2)    # critic winner
+            # Get the continuous actions from both parent policies.
+            p1_actions = parent1.policy(states)
+            p2_actions = parent2.policy(states)
+            
+            # Condition the state with the island's main objective weight.
+            weight_batch = weight_tensor.expand(states.shape[0], -1)
+            state_conditioned = torch.cat([states, weight_batch], 1)
 
-        # BCE / CE on child logits
-        logits = child.net(states)
-        loss = F.cross_entropy(logits, target_act)
+            # Use the critic to determine which parent's action is better.
+            q1 = critic.Q1(state_conditioned, p1_actions)
+            q2 = critic.Q1(state_conditioned, p2_actions)
+            
+            # The target is the action from the parent with the higher Q-value.
+            target_action = torch.where(q1 >= q2, p1_actions, p2_actions)
 
-        opt.zero_grad()
+        # Train the child to regress onto the target action.
+        child_action = child.policy(states)
+        loss = F.mse_loss(child_action, target_action)
+
+        optimizer.zero_grad()
         loss.backward()
-        opt.step()
+        optimizer.step()
 
     return child

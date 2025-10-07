@@ -60,12 +60,7 @@ class IslandManager:
         self.other_ws = other_scalar_weights
 
         # Inspect the environment's action space to generalize.
-        if isinstance(self.env.action_space, gym.spaces.Discrete):
-            self.action_type = "discrete"
-            self.action_dim = self.env.action_space.n
-            self.max_action = None  # Cannot be retrieved for discrete gym envs
-        elif isinstance(self.env.action_space, gym.spaces.Box):
-            self.action_type = "continuous"
+        if isinstance(self.env.action_space, gym.spaces.Box):
             self.action_dim = self.env.action_space.shape[0]
             self.max_action = self.env.action_space.high[0]
         else:

@@ -6,7 +6,7 @@ import copy
 import numpy as np
 import torch
 # MODIFIED: Import ContinuousPolicy
-from catserl.shared.policies import DiscretePolicy, ContinuousPolicy
+from catserl.shared.policies import ContinuousPolicy
 from catserl.shared.buffers import MiniBuffer
 
 

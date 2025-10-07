@@ -74,11 +74,7 @@ class ReplayBuffer:
         rewards = torch.from_numpy(rewards).float().to(self.device)
         dones = torch.from_numpy(dones.astype(np.uint8)).float().to(self.device)
 
-        # Conditionally cast actions tensor based on action type
-        if self.action_type == 'discrete':
-            actions = torch.from_numpy(actions).long().to(self.device)
-        else: # continuous
-            actions = torch.from_numpy(actions).float().to(self.device)
+        actions = torch.from_numpy(actions).float().to(self.device)
 
         return states, actions, rewards, next_states, dones
 
@@ -134,11 +130,8 @@ class MiniBuffer:
             self.next_states = np.zeros((self.max_steps, *obs_shape), dtype=np.float32)
             self.dones = np.zeros(self.max_steps, dtype=bool)
 
-            # Initialize actions array based on action type
-            if self.action_type == 'discrete':
-                self.actions = np.zeros(self.max_steps, dtype=np.int64)
-            else: # continuous
-                self.actions = np.zeros((self.max_steps, self.action_dim), dtype=np.float32)
+            # Initialize actions array
+            self.actions = np.zeros((self.max_steps, self.action_dim), dtype=np.float32)
 
 
     def add(self, state: np.ndarray, action: Union[int, np.ndarray], reward_vec: np.ndarray, next_state: np.ndarray, done: bool):

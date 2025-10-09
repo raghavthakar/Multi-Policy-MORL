@@ -197,77 +197,79 @@ class IslandManager:
     # ----------  Warm-up ---------------------------------------------- #
     # ------------------------------------------------------------------ #
     def train(self, steps_to_train=1000) -> Dict:
-        # Use a start-up period to populate the buffer with random actions.
-        start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
 
-        # Initialize environment and training state on the very first step.
-        if self.trained_timesteps == 0:
-            state, _ = self.env.reset(seed=self.seed)
-            self._training_stats.set(state, None, 0, 0, True)
+        if self.alg_name == 'td3':
+            # Use a start-up period to populate the buffer with random actions.
+            start_timesteps = self.worker.agent.rl_kick_in_frames # Get from agent
 
-        # --- Training Loop ---
-        for _ in range(steps_to_train):
-            state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
-            
-            # Use random actions for the start-up period, otherwise use the policy.
-            if self.trained_timesteps < start_timesteps:
-                action = self.worker.act(state, random_action=True)
-            else:
-                action = self.worker.act(state, noisy_action=True)
+            # Initialize environment and training state on the very first step.
+            if self.trained_timesteps == 0:
+                state, _ = self.env.reset(seed=self.seed)
+                self._training_stats.set(state, None, 0, 0, True)
 
-            # Step the environment
-            next_state, reward_vec, done, trunc, _ = self.env.step(action)
-            
-            # Store the transition in the agent's buffer
-            self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
-
-            # Accumulate episode rewards
-            if ep_return_vec is None:
-                ep_return_vec = np.array(reward_vec, dtype=np.float32)
-            else:
-                ep_return_vec += reward_vec
-
-            state = next_state
-            ep_len += 1
-
-            # Perform learning updates
-            if self.trained_timesteps >= start_timesteps and self.trained_timesteps % self.update_every_n_steps == 0:
-                for _ in range(self.updates_per_session):
-                    self.worker.update()
-            
-            self.trained_timesteps += 1
-
-            # Save a resume snapshot periodically.
-            if self.trained_timesteps > 0 and self.trained_timesteps % self.timesteps_between_checkpoints == 0 and self.checkpointer:
-                manager_state = {
-                    'trained_timesteps': self.trained_timesteps,
-                    'training_stats': self._training_stats
-                }
-                self.checkpointer.save_island_snapshot(
-                    agent=self.worker.agent,
-                    buffer=self.worker.buffer(),
-                    manager_state=manager_state,
-                    island_id=self.island_id
-                )
-
-            # Handle episode termination
-            if done or trunc:
-                scalar_return = (ep_return_vec * self.w).sum()
-                print(f"[Island {self.island_id}] Steps: {self.trained_timesteps}, Ep: {episodes_completed+1}, Len: {ep_len}, Return: {scalar_return:.2f}")
+            # --- Training Loop ---
+            for _ in range(steps_to_train):
+                state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
                 
-                self.scalar_returns.append(scalar_return)
-                self.vector_returns.append(ep_return_vec)
+                # Use random actions for the start-up period, otherwise use the policy.
+                if self.trained_timesteps < start_timesteps:
+                    action = self.worker.act(state, random_action=True)
+                else:
+                    action = self.worker.act(state, noisy_action=True)
+
+                # Step the environment
+                next_state, reward_vec, done, trunc, _ = self.env.step(action)
                 
-                # Reset for next episode
-                state, _ = self.env.reset()
-                ep_return_vec = None
-                ep_len = 0
-                episodes_completed += 1
+                # Store the transition in the agent's buffer
+                self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
+
+                # Accumulate episode rewards
+                if ep_return_vec is None:
+                    ep_return_vec = np.array(reward_vec, dtype=np.float32)
+                else:
+                    ep_return_vec += reward_vec
+
+                state = next_state
+                ep_len += 1
+
+                # Perform learning updates
+                if self.trained_timesteps >= start_timesteps and self.trained_timesteps % self.update_every_n_steps == 0:
+                    for _ in range(self.updates_per_session):
+                        self.worker.update()
+                
+                self.trained_timesteps += 1
+
+                # Save a resume snapshot periodically.
+                if self.trained_timesteps > 0 and self.trained_timesteps % self.timesteps_between_checkpoints == 0 and self.checkpointer:
+                    manager_state = {
+                        'trained_timesteps': self.trained_timesteps,
+                        'training_stats': self._training_stats
+                    }
+                    self.checkpointer.save_island_snapshot(
+                        agent=self.worker.agent,
+                        buffer=self.worker.buffer(),
+                        manager_state=manager_state,
+                        island_id=self.island_id
+                    )
+
+                # Handle episode termination
+                if done or trunc:
+                    scalar_return = (ep_return_vec * self.w).sum()
+                    print(f"[Island {self.island_id}] Steps: {self.trained_timesteps}, Ep: {episodes_completed+1}, Len: {ep_len}, Return: {scalar_return:.2f}")
+                    
+                    self.scalar_returns.append(scalar_return)
+                    self.vector_returns.append(ep_return_vec)
+                    
+                    # Reset for next episode
+                    state, _ = self.env.reset()
+                    ep_return_vec = None
+                    ep_len = 0
+                    episodes_completed += 1
+                
+                # Update persistent variables
+                self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
             
-            # Update persistent variables
-            self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
-        
-        return self.trained_timesteps
+            return self.trained_timesteps
 
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #

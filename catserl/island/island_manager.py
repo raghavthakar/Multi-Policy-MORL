@@ -11,6 +11,8 @@ from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
 from catserl.shared.evo_utils import eval_pop
 from catserl.shared import checkpoint
+from catserl.shared.evo_utils.selection import elitist_select
+from catserl.shared.evo_utils.proximal_mutation import proximal_mutate
 
 
 class IslandManager:
@@ -270,6 +272,50 @@ class IslandManager:
                 self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
             
             return self.trained_timesteps
+
+        elif self.alg_name == 'pderl':
+            episodes = int(self.cfg['pderl'].get('episodes_per_actor', 3))
+            num_elites = int(self.cfg['pderl'].get('num_elites', 1))
+            mut_prob = float(self.cfg['pderl'].get('mutation_prob', 0.9))
+            mut_sigma = float(self.cfg['pderl'].get('mutation_mag', 0.1))
+            mut_batch = int(self.cfg['pderl'].get('mutation_batch_size', 256))
+
+            # Evaluate population and refresh per-actor buffers for operators
+            frames = eval_pop.eval_pop(
+                pop=self.pop,
+                env=self.env,
+                weight_vector=self.w,
+                episodes_per_actor=episodes,
+                max_ep_len=self.max_ep_len,
+                rl_worker=None,
+                seed=None,
+                store_transitions=True,
+            )
+            self.trained_timesteps += frames
+
+            # Assign scalar fitness for selection
+            for actor in self.pop:
+                actor.fitness = float(actor.vector_return @ self.w)
+
+            # Elitism
+            elites = elitist_select(self.pop, num_elites=num_elites)
+            elite_set = set(id(a) for a in elites)
+
+            # Select non-elites for proximal mutation with independent probability
+            to_mutate = [a for a in self.pop if id(a) not in elite_set and np.random.rand() < mut_prob]
+            if len(to_mutate) > 0:
+                proximal_mutate(
+                    pop=to_mutate,
+                    critic=self.worker.critic(),
+                    main_scalar_weight=self.w,
+                    sigma=mut_sigma,
+                    batch_size=mut_batch,
+                )
+
+            return self.trained_timesteps
+
+        else:
+            raise ValueError(f"Unsupported RL algorithm: {self.rl_alg_name}")
 
     # ------------------------------------------------------------------ #
     # ----------  Accessors needed by later stages  --------------------- #

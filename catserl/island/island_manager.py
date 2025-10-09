@@ -53,6 +53,8 @@ class IslandManager:
         self.cfg = cfg
         self.env = env
         self.rl_alg_name = 'td3'
+        self.alg_name = 'pderl'
+        self.action_type = 'continuous'
         # -------------------------------------------------------------- #
         self.seed = seed
         # -------------------------------------------------------------- #
@@ -76,15 +78,9 @@ class IslandManager:
                                cfg["rl"],
                                device)
 
-        self.pop = []
-
-        # removed: self.total_timesteps
         self.trained_timesteps = 0
         self.max_ep_len = cfg["env"].get("max_ep_len", -1)  # default max episode length
-
-        # Update frequency
-        self.update_every_n_steps = cfg['rl']['update_every_n_steps']
-        self.updates_per_session = cfg['rl']['updates_per_session']
+        self.pop = []
 
         # Stats
         self.scalar_returns: deque = deque(maxlen=100)
@@ -96,7 +92,22 @@ class IslandManager:
 
         # Track training variables
         self._training_stats = self.TrainingStats()
+
+        # TD3-specific parameters
+        self.update_every_n_steps = cfg['rl']['update_every_n_steps'] # aka training frequency
+        self.updates_per_session = cfg['rl']['updates_per_session'] # aka training epochs
     
+        # PDERL-specific parameters
+        if self.alg_name == 'pderl':
+            self.pop = [actors.Actor(kind='td3',
+                                     pop_id=0,
+                                     obs_shape=self.env.observation_space.shape, 
+                                     action_type=self.action_type, 
+                                     action_dim=self.action_dim, 
+                                     hidden_dim=256, 
+                                     max_action=self.max_action, 
+                                     device=device) for _ in range(cfg['pderl']['pop_size'])]
+
     class TrainingStats:
         "Persistent training variables that allow control to pop in and out of the train() method."
         def __init__(self):

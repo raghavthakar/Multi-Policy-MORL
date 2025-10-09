@@ -13,7 +13,7 @@ from typing import Tuple, Any
 import numpy as np
 
 
-def deterministic_rollout(env, actor, store_transitions: bool = True, max_ep_len: int = -1, other_actor=None, seed: int = None) -> Tuple[np.ndarray, int, np.ndarray]:
+def deterministic_rollout(env, actor, noisy_action: bool = False, store_transitions: bool = True, max_ep_len: int = -1, other_actor=None, seed: int = None) -> Tuple[np.ndarray, int, np.ndarray]:
     """
     Runs ONE episode and (optionally) stores transitions.
     
@@ -44,7 +44,7 @@ def deterministic_rollout(env, actor, store_transitions: bool = True, max_ep_len
     ep_len = 0
 
     while not (done or trunc):
-        a = actor.act(s, noisy_action=False)
+        a = actor.act(s, noisy_action=noisy_action)
         s2, r_vec, done, trunc, info = env.step(a)
         if done == True:
             print("WOOOOO")

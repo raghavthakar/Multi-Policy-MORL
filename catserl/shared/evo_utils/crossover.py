@@ -4,8 +4,41 @@ from typing import Dict
 import torch
 import numpy as np
 import torch.nn.functional as F
+import random
 
 from catserl.shared.actors import Actor
+
+def basic_crossover(parent1: Actor, parent2: Actor) -> Actor:
+    """
+    Creates a child by performing a simple crossover of two parent actors.
+
+    This operator mixes the parameters (weights and biases) of the parent
+    networks by randomly swapping entire rows (neurons).
+    """
+    # The child starts as a clone of the first parent.
+    child = parent1.clone()
+
+    # Iterate through the parameters of the child and the second parent.
+    for child_param, p2_param in zip(child.policy.parameters(), parent2.policy.parameters()):
+        # References to the underlying parameter data.
+        child_data = child_param.data
+        p2_data = p2_param.data
+
+        # For 2D weight matrices, swap a random number of rows.
+        if len(child_data.shape) == 2:
+            num_rows = child_data.shape[0]
+            num_to_swap = random.randint(0, num_rows)
+            row_indices = random.sample(range(num_rows), k=num_to_swap)
+            child_data[row_indices] = p2_data[row_indices]
+        
+        # For 1D bias vectors, swap a random number of elements.
+        elif len(child_data.shape) == 1:
+            num_elements = child_data.shape[0]
+            num_to_swap = random.randint(0, num_elements)
+            elem_indices = random.sample(range(num_elements), k=num_to_swap)
+            child_data[elem_indices] = p2_data[elem_indices]
+    
+    return child
 
 def fill_child_buffer_from_parents(child: Actor, parent1: Actor, parent2: Actor):
     """

@@ -5,14 +5,16 @@ import numpy as np, torch
 from collections import deque
 import mo_gymnasium as mo_gym
 import gymnasium as gym
+import random
 
 from catserl.shared.rl import RLWorker
 from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
 from catserl.shared.evo_utils import eval_pop
 from catserl.shared import checkpoint
-from catserl.shared.evo_utils.selection import elitist_select
+from catserl.shared.evo_utils.selection import elitist_select, selection_tournament
 from catserl.shared.evo_utils.proximal_mutation import proximal_mutate
+from catserl.shared.evo_utils.crossover import basic_crossover
 
 
 class IslandManager:
@@ -299,18 +301,26 @@ class IslandManager:
 
             # Elitism
             elites = elitist_select(self.pop, num_elites=num_elites)
-            elite_set = set(id(a) for a in elites)
+            parents = selection_tournament(self.pop, num_to_select=len(self.pop) - num_elites, tournament_size=3)
+
+            # Crossover to create offspring
+            offspring = []
+            for _ in range(len(self.pop) - num_elites):
+                p1, p2 = random.sample(parents, 2)
+                child = basic_crossover(p1, p2) # Uses simple crossover for now.
+                offspring.append(child)
 
             # Select non-elites for proximal mutation with independent probability
-            to_mutate = [a for a in self.pop if id(a) not in elite_set and np.random.rand() < mut_prob]
-            if len(to_mutate) > 0:
-                proximal_mutate(
-                    pop=to_mutate,
-                    critic=self.worker.critic(),
-                    main_scalar_weight=self.w,
-                    sigma=mut_sigma,
-                    batch_size=mut_batch,
-                )
+            proximal_mutate(
+                pop=offspring,
+                critic=self.worker.critic(),
+                main_scalar_weight=self.w,
+                sigma=self.cfg.get('mutation_mag', 0.1),
+                batch_size=self.cfg.get('mutation_batch_size', 256)
+            )
+
+            # New population replacement
+            self.pop = elites + offspring
             
             # --- TD3 rollout (one episode) ---
             frames_rl = 0
@@ -326,7 +336,7 @@ class IslandManager:
             self.trained_timesteps += frames_rl
 
             # --- TD3 updates ---
-            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 200))
+            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 11000))
             for _ in range(updates):
                 self.worker.update()
 
@@ -341,13 +351,10 @@ class IslandManager:
                 if (self._pderl_gen % period) == 0:
                     # Choose a replacee that is not the elite
                     # Find worst by current fitness among non-elites
-                    non_elites = [a for a in self.pop if id(a) not in elite_set]
-                    if len(non_elites) > 0:
-                        worst = min(non_elites, key=lambda a: a.fitness if a.fitness is not None else -np.inf)
-
-                        # Copy TD3 policy parameters into the chosen evolutionary actor
-                        flat, _ = self.worker.export_policy_params()
-                        worst.load_flat_params(flat)
+                    worst = min(self.pop, key=lambda p: p.fitness)
+                    # Copy TD3 policy parameters into the chosen evolutionary actor
+                    flat, _ = self.worker.export_policy_params()
+                    worst.load_flat_params(flat)
 
             return self.trained_timesteps
 

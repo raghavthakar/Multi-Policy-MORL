@@ -287,7 +287,7 @@ class IslandManager:
                 weight_vector=self.w,
                 episodes_per_actor=episodes,
                 max_ep_len=self.max_ep_len,
-                rl_worker=None,
+                rl_worker=self.worker,
                 seed=None,
                 store_transitions=True,
             )
@@ -311,6 +311,43 @@ class IslandManager:
                     sigma=mut_sigma,
                     batch_size=mut_batch,
                 )
+            
+            # --- TD3 rollout (one episode) ---
+            frames_rl = 0
+            state, _ = self.env.reset(seed=None)
+            done = False
+            trunc = False
+            while not (done or trunc):
+                action = self.worker.act(state, noisy_action=True)
+                next_state, reward_vec, done, trunc, _ = self.env.step(action)
+                self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
+                state = next_state
+                frames_rl += 1
+            self.trained_timesteps += frames_rl
+
+            # --- TD3 updates ---
+            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 200))
+            for _ in range(updates):
+                self.worker.update()
+
+            # --- RL->EA sync (periodic) ---
+            period = int(self.cfg['pderl'].get('rl_to_ea_sync_period', 0))
+            if period > 0:
+                # Track generation count once per PDERL iteration
+                if not hasattr(self, "_pderl_gen"):
+                    self._pderl_gen = 0
+                self._pderl_gen += 1
+
+                if (self._pderl_gen % period) == 0:
+                    # Choose a replacee that is not the elite
+                    # Find worst by current fitness among non-elites
+                    non_elites = [a for a in self.pop if id(a) not in elite_set]
+                    if len(non_elites) > 0:
+                        worst = min(non_elites, key=lambda a: a.fitness if a.fitness is not None else -np.inf)
+
+                        # Copy TD3 policy parameters into the chosen evolutionary actor
+                        flat, _ = self.worker.export_policy_params()
+                        worst.load_flat_params(flat)
 
             return self.trained_timesteps
 

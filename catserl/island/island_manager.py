@@ -393,6 +393,6 @@ class IslandManager:
             The scalarising weight vector for this island.
         """
         self._eval_policy()
-        self.pop=[self._make_rl_actor()]
+        # self.pop.append(self._make_rl_actor())
         # eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

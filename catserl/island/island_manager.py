@@ -14,7 +14,7 @@ from catserl.shared.evo_utils import eval_pop
 from catserl.shared import checkpoint
 from catserl.shared.evo_utils.selection import elitist_select, selection_tournament
 from catserl.shared.evo_utils.proximal_mutation import proximal_mutate
-from catserl.shared.evo_utils.crossover import basic_crossover
+from catserl.shared.evo_utils.crossover import basic_crossover, distilled_crossover
 
 
 class IslandManager:
@@ -307,7 +307,7 @@ class IslandManager:
             offspring = []
             for _ in range(len(self.pop) - num_elites):
                 p1, p2 = random.sample(parents, 2)
-                child = basic_crossover(p1, p2) # Uses simple crossover for now.
+                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, "cpu")
                 offspring.append(child)
 
             # Select non-elites for proximal mutation with independent probability

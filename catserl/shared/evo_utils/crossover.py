@@ -127,7 +127,7 @@ def distilled_crossover(
 
     # Behavior cloning loop to distill parent knowledge.
     for _ in range(bc_epochs):
-        states, _ = child.buffer.sample(bc_batch_size, device=device)
+        states, *_ = child.buffer.sample(bc_batch_size, device=device)
         
         with torch.no_grad():
             # Get the continuous actions from both parent policies.

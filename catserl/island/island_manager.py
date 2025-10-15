@@ -255,7 +255,8 @@ class IslandManager:
                         agent=self.worker.agent,
                         buffer=self.worker.buffer(),
                         manager_state=manager_state,
-                        island_id=self.island_id
+                        island_id=self.island_id,
+                        algorithm='td3'
                     )
 
                 # Handle episode termination

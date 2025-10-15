@@ -5,7 +5,7 @@ Replay-memory utilities shared by RL workers and genetic actors.
 from __future__ import annotations
 import random
 from collections import deque
-from typing import Deque, List, Tuple, Union
+from typing import Deque, List, Tuple, Union, Dict
 
 import numpy as np
 import torch
@@ -218,3 +218,40 @@ class MiniBuffer:
         self.rewards[:length] = self.rewards[perm]
         self.next_states[:length] = self.next_states[perm]
         self.dones[:length] = self.dones[perm]
+    
+    def get_state(self) -> Dict:
+        """
+        Returns a dictionary containing the entire state of the buffer.
+        
+        This includes the data arrays and the internal state variables (pointer
+        and full status) required for a perfect restoration.
+        """
+        # Return None if the buffer has not been initialized yet.
+        if self.states is None:
+            return None
+            
+        return {
+            "states": self.states,
+            "actions": self.actions,
+            "rewards": self.rewards,
+            "next_states": self.next_states,
+            "dones": self.dones,
+            "ptr": self.ptr,
+            "full": self.full,
+        }
+
+    def load_state(self, state_dict: Dict) -> None:
+        """
+        Restores the buffer's state from a previously saved state dictionary.
+        """
+        if state_dict is None:
+            self.clear() # If there's no state, reset to empty.
+            return
+
+        self.states = state_dict["states"]
+        self.actions = state_dict["actions"]
+        self.rewards = state_dict["rewards"]
+        self.next_states = state_dict["next_states"]
+        self.dones = state_dict["dones"]
+        self.ptr = state_dict["ptr"]
+        self.full = state_dict["full"]

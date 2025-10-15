@@ -111,6 +111,8 @@ class IslandManager:
                                      hidden_dim=256, 
                                      max_action=self.max_action, 
                                      device=device) for _ in range(cfg['pderl']['pop_size'])]
+            self._pderl_gen = 0
+            self._num_checkpts = 0 # How many island snapshots have been saved
 
     class TrainingStats:
         "Persistent training variables that allow control to pop in and out of the train() method."
@@ -298,29 +300,6 @@ class IslandManager:
             # Assign scalar fitness for selection
             for actor in self.pop:
                 actor.fitness = float(actor.vector_return @ self.w)
-
-            # Elitism
-            elites = elitist_select(self.pop, num_elites=num_elites)
-            parents = selection_tournament(self.pop, num_to_select=len(self.pop) - num_elites, tournament_size=3)
-
-            # Crossover to create offspring
-            offspring = []
-            for _ in range(len(self.pop) - num_elites):
-                p1, p2 = random.sample(parents, 2)
-                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, "cpu")
-                offspring.append(child)
-
-            # Select non-elites for proximal mutation with independent probability
-            proximal_mutate(
-                pop=offspring,
-                critic=self.worker.critic(),
-                main_scalar_weight=self.w,
-                sigma=self.cfg.get('mutation_mag', 0.1),
-                batch_size=self.cfg.get('mutation_batch_size', 256)
-            )
-
-            # New population replacement
-            self.pop = elites + offspring
             
             # --- TD3 rollout (one episode) ---
             frames_rl = 0
@@ -336,25 +315,63 @@ class IslandManager:
             self.trained_timesteps += frames_rl
 
             # --- TD3 updates ---
-            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 11000))
+            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 1000))
             for _ in range(updates):
                 self.worker.update()
 
-            # --- RL->EA sync (periodic) ---
-            period = int(self.cfg['pderl'].get('rl_to_ea_sync_period', 0))
-            if period > 0:
-                # Track generation count once per PDERL iteration
-                if not hasattr(self, "_pderl_gen"):
-                    self._pderl_gen = 0
-                self._pderl_gen += 1
+            # Elitism
+            elites = elitist_select(self.pop, num_elites=num_elites)
+            parents = selection_tournament(self.pop, num_to_select=len(self.pop) - num_elites, tournament_size=3)
 
-                if (self._pderl_gen % period) == 0:
-                    # Choose a replacee that is not the elite
-                    # Find worst by current fitness among non-elites
-                    worst = min(self.pop, key=lambda p: p.fitness)
-                    # Copy TD3 policy parameters into the chosen evolutionary actor
-                    flat, _ = self.worker.export_policy_params()
-                    worst.load_flat_params(flat)
+            # Create offsprings through RL->EA migration or crossover
+            offspring = []
+
+            period = int(self.cfg['pderl'].get('rl_to_ea_sync_period', 1))
+            # if time to sync, then create rl actor policy from worker
+            if period > 0 and (self._pderl_gen % period) == 0:
+                offspring.append(self._make_rl_actor())
+            
+            offsprings_to_create = len(self.pop) - num_elites - len(offspring) # account for if RL->EA migration occured
+            
+            # Fill the remaining slots with crossover offsprings
+            for _ in range(offsprings_to_create):
+                p1, p2 = random.sample(parents, 2)
+                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, "cpu")
+                offspring.append(child)
+
+            # Select non-elites for proximal mutation with independent probability
+            proximal_mutate(
+                pop=offspring,
+                critic=self.worker.critic(),
+                main_scalar_weight=self.w,
+                sigma=self.cfg.get('mutation_mag', 0.1),
+                batch_size=self.cfg.get('mutation_batch_size', 256)
+            )            
+
+            # New population replacement
+            self.pop = elites + offspring
+
+            # Check if time to checkpoint
+            if self.trained_timesteps > 0 and self.trained_timesteps // self.timesteps_between_checkpoints > self._num_checkpts:
+                self._num_checkpts = self.trained_timesteps // self.timesteps_between_checkpoints # Update num checkpoints saved
+            
+                # --- Checkpointing ---
+                manager_state = {
+                    'trained_timesteps': self.trained_timesteps,
+                    '_pderl_gen': self._pderl_gen
+                    # NOTE: _training_stats is not used by PDERL, so we don't save it.
+                }
+                self.checkpointer.save_island_snapshot(
+                    manager_state=manager_state,
+                    island_id=self.island_id,
+                    algorithm='pderl',
+                    agent=self.worker.agent,
+                    buffer=self.worker.buffer(),
+                    population=self.pop
+                )
+
+            # Track generation count once per PDERL iteration
+            self._pderl_gen += 1
 
             return self.trained_timesteps
 

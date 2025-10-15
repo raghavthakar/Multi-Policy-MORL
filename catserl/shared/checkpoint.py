@@ -1,3 +1,4 @@
+# catserl/shared/checkpoint.py
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
@@ -8,10 +9,10 @@ import numpy as np
 
 from catserl.shared.actors import Actor
 from catserl.shared.buffers import ReplayBuffer
-from catserl.shared.rl import TD3  # Assuming TD3 is the agent type
+from catserl.shared.rl import TD3
 
 class Checkpoint:
-    """Handles saving and loading the merged population and critics for Stage 2."""
+    """Handles saving and loading of training states."""
 
     VERSION = 2  # Incremented version for new checkpoint format
     MERGED_POPS_FILENAME = 'merged_populations.dat'
@@ -29,10 +30,12 @@ class Checkpoint:
     @torch.no_grad()
     def save_island_snapshot(
         self,
+        manager_state: Dict,
+        island_id: int,
+        algorithm: str,
         agent: TD3,
         buffer: ReplayBuffer,
-        manager_state: Dict,
-        island_id: int
+        population: Optional[List[Actor]] = None
     ) -> None:
         """
         Saves a complete snapshot of an island's training state.
@@ -58,10 +61,22 @@ class Checkpoint:
         # The payload contains all necessary components for a full resume.
         payload = {
             "version": self.VERSION,
+            "algorithm": algorithm,
             "agent_state": agent.save_state(),
             "buffer_state": buffer_state,
             "manager_state": manager_state,
         }
+
+        # If saving a PDERL state, also serialize the population.
+        if algorithm == 'pderl' and population is not None:
+            population_state = []
+            for actor in population:
+                actor_state = {
+                    "flat_params": actor.flat_params(),
+                    "buffer_state": actor.buffer.get_state()
+                }
+                population_state.append(actor_state)
+            payload['population_state'] = population_state
 
         filename = self.SNAPSHOT_FILENAME_TEMPLATE.format(island_id=island_id, timestep=timestep)
         filepath = self.path / filename

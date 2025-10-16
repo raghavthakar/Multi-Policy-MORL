@@ -142,36 +142,70 @@ class IslandManager:
     def resume_from_checkpoint(self) -> None:
         """
         Restores the island's complete training state from the latest snapshot.
-        
-        This includes the agent's networks, optimizers, the replay buffer,
-        and the manager's training progress counters.
+
+        TD3:
+        - Restores agent, replay buffer, trained_timesteps, and training_stats (if present).
+        PDERL:
+        - Restores agent and replay buffer (via loader), trained_timesteps, _pderl_gen,
+            and reconstructs self.pop from the saved GA population.
         """
         if not self.checkpointer:
             print(f"[Island {self.island_id}] No checkpointer provided, cannot resume.")
             return
 
-        # The load method restores the agent and buffer in-place and
-        # returns the manager's state dictionary.
         manager_state = self.checkpointer.load_latest_island_snapshot(
             island_id=self.island_id,
             agent=self.worker.agent,
             buffer=self.worker.buffer()
         )
 
-        if manager_state:
-            # manager_state expected to be a dict containing trained_timesteps and training_stats
-            self.trained_timesteps = manager_state.get('trained_timesteps', self.trained_timesteps)
-            # Attempt to restore training_stats object if present
-            if 'training_stats' in manager_state:
-                try:
-                    self._training_stats = manager_state['training_stats']
-                except Exception:
-                    # If direct assignment fails, ignore and continue
-                    pass
-            print(f"[Island {self.island_id}] Resumed training from timestep {self.trained_timesteps}.")
-        else:
+        if not manager_state:
             print(f"[Island {self.island_id}] No checkpoint found, starting from scratch.")
-    
+            return
+
+        # Common: trained timesteps
+        self.trained_timesteps = manager_state.get('trained_timesteps', self.trained_timesteps)
+
+        if self.alg_name == 'td3':
+            # Preserve original TD3 behavior; also handle dict-style training_stats gracefully
+            if 'training_stats' in manager_state:
+                ts = manager_state['training_stats']
+                try:
+                    # Backwards-compat: if caller stored the object, keep it
+                    if isinstance(ts, self.TrainingStats):
+                        self._training_stats = ts
+                    elif isinstance(ts, dict):
+                        # If stored as dict, reconstruct minimal fields
+                        self._training_stats.set(
+                            ts.get('state'),
+                            ts.get('ep_return_vec'),
+                            ts.get('ep_len', 0),
+                            ts.get('episodes_completed', 0),
+                            ts.get('random_action', True),
+                        )
+                except Exception:
+                    pass  # Non-fatal; resume without mid-episode state
+            print(f"[Island {self.island_id}] (TD3) Resumed training from timestep {self.trained_timesteps}.")
+
+        elif self.alg_name == 'pderl':
+            # Rehydrate GA population (the loader injected it into manager_state)
+            pop = manager_state.get('population', None)
+            if pop is not None:
+                self.pop = pop
+            else:
+                print(f"[Island {self.island_id}] (PDERL) Warning: snapshot missing population; continuing with existing self.pop.")
+
+            # Restore generation counter if present
+            self._pderl_gen = manager_state.get('_pderl_gen', getattr(self, '_pderl_gen', 0))
+
+            # PDERL doesn't use episodic TD3 TrainingStats; reset it to a clean slate
+            self._training_stats = self.TrainingStats()
+
+            print(f"[Island {self.island_id}] (PDERL) Resumed training from timestep {self.trained_timesteps}, gen {self._pderl_gen}.")
+
+        else:
+            print(f"[Island {self.island_id}] Unknown algorithm '{self.alg_name}'. Resumed core TD3 state only.")
+        
     # ---------- get a deterministic evaluation of the policy -----------
     def _eval_policy(self, episodes_per_actor=10):
         vec_return = np.zeros_like(self.w, dtype=np.float32)

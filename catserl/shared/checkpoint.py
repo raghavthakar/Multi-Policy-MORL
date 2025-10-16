@@ -14,18 +14,16 @@ from catserl.shared.rl import TD3
 class Checkpoint:
     """Handles saving and loading of training states."""
 
-    VERSION = 2  # Incremented version for new checkpoint format
+    VERSION = 2
     MERGED_POPS_FILENAME = 'merged_populations.dat'
     SNAPSHOT_FILENAME_TEMPLATE = 'island_{island_id}_t{timestep}.ckpt'
 
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self.path.mkdir(parents=True, exist_ok=True)
-        # legacy single-file path (kept for backward compatibility)
-        self.file_path = self.path / self.MERGED_POPS_FILENAME    # actual checkpoint file (legacy)
-        # pattern components
+        self.file_path = self.path / self.MERGED_POPS_FILENAME
         self._merged_stem = Path(self.MERGED_POPS_FILENAME).stem
-        self._merged_suffix = Path(self.MERGED_POPS_FILENAME).suffix  # includes the leading dot, e.g. '.dat'
+        self._merged_suffix = Path(self.MERGED_POPS_FILENAME).suffix
 
     @torch.no_grad()
     def save_island_snapshot(
@@ -38,15 +36,15 @@ class Checkpoint:
         population: Optional[List[Actor]] = None
     ) -> None:
         """
-        Saves a complete snapshot of an island's training state.
-
-        This includes the full agent state (networks, optimizers), the replay
-        buffer, and the manager's progress trackers, allowing a Stage 1 run
-        to be perfectly resumed.
+        Saves a complete snapshot of an island's training state:
+          - TD3 agent (nets + optimizers) via agent.save_state()
+          - TD3 large replay buffer contents
+          - manager_state (timers/counters, etc.)
+          - If algorithm == 'pderl': GA population (actors + mini-buffers)
         """
         timestep = manager_state.get('trained_timesteps', 0)
 
-        # Serialize the ReplayBuffer's content.
+        # ---- Serialize the large TD3 replay buffer ----
         transitions = list(buffer._storage)
         if not transitions:
             states, actions, rewards, next_states, dones = [], [], [], [], []
@@ -54,12 +52,14 @@ class Checkpoint:
             states, actions, rewards, next_states, dones = map(np.stack, zip(*transitions))
 
         buffer_state = {
-            "states": states, "actions": actions, "rewards": rewards,
-            "next_states": next_states, "dones": dones
+            "states": states,
+            "actions": actions,
+            "rewards": rewards,
+            "next_states": next_states,
+            "dones": dones,
         }
 
-        # The payload contains all necessary components for a full resume.
-        payload = {
+        payload: Dict[str, Any] = {
             "version": self.VERSION,
             "algorithm": algorithm,
             "agent_state": agent.save_state(),
@@ -67,17 +67,35 @@ class Checkpoint:
             "manager_state": manager_state,
         }
 
-        # If saving a PDERL state, also serialize the population.
+        # ---- If PDERL, serialize GA population with full metadata ----
         if algorithm == 'pderl' and population is not None:
-            population_state = []
+            population_state: List[Dict[str, Any]] = []
             for actor in population:
+                # MiniBuffer snapshot; may be None if never initialized
+                buf_state = None
+                if hasattr(actor, "buffer") and hasattr(actor.buffer, "get_state"):
+                    buf_state = actor.buffer.get_state()
+
                 actor_state = {
-                    "flat_params": actor.flat_params(),
-                    "buffer_state": actor.buffer.get_state()
+                    # construction metadata required to rehydrate Actor
+                    "kind": actor.kind,
+                    "pop_id": actor.pop_id,
+                    "obs_shape": actor.obs_shape,
+                    "action_type": actor.action_type,
+                    "action_dim": actor.action_dim,
+                    "hidden_dim": actor.hidden_dim,
+                    "max_action": actor.max_action,
+                    # MiniBuffer capacity for constructor
+                    "buffer_size": getattr(actor.buffer, "max_steps", 0),
+                    # parameters + mini-buffer contents
+                    "flat_params": actor.flat_params().cpu(),
+                    "buffer_state": buf_state,  # None or dict with arrays/ptr/full
                 }
                 population_state.append(actor_state)
-            payload['population_state'] = population_state
 
+            payload["population_state"] = population_state
+
+        # ---- Atomic write ----
         filename = self.SNAPSHOT_FILENAME_TEMPLATE.format(island_id=island_id, timestep=timestep)
         filepath = self.path / filename
         tmp_path = filepath.with_name(filepath.name + ".tmp")
@@ -86,18 +104,23 @@ class Checkpoint:
         print(f"[Checkpoint] Saved island {island_id} snapshot at timestep {timestep}.")
 
     @torch.no_grad()
-    def load_latest_island_snapshot(self, island_id: int, agent: TD3, buffer: ReplayBuffer) -> Optional[Dict]:
+    def load_latest_island_snapshot(
+        self,
+        island_id: int,
+        agent: TD3,
+        buffer: ReplayBuffer
+    ) -> Optional[Dict]:
         """
-        Finds and loads the latest training snapshot for a given island.
-
-        Restores the state of the provided agent and buffer in-place.
-
+        Loads the latest snapshot for an island.
+        - Always restores TD3 agent + large replay buffer in-place.
+        - If snapshot is PDERL, reconstructs GA population and returns it
+          embedded in the returned manager_state under 'population'.
         Returns:
-            The loaded manager_state dictionary if a checkpoint is found,
-            otherwise None.
+            manager_state dict, possibly augmented with 'population' (PDERL).
+            None if no snapshot was found.
         """
         pattern = re.compile(f"island_{island_id}_t(\\d+)\\.ckpt$")
-        matches = {}
+        matches: Dict[int, Path] = {}
         for p in self.path.iterdir():
             if not p.is_file():
                 continue
@@ -115,11 +138,10 @@ class Checkpoint:
 
         payload = torch.load(latest_ckpt_path, map_location=agent.device, weights_only=False)
 
-        # Restore the state of the agent and buffer.
+        # ---- Restore TD3 agent + large buffer ----
         agent.load_state(payload['agent_state'])
 
         buffer_state = payload['buffer_state']
-        # Clear existing buffer storage and re-push transitions
         buffer._storage.clear()
         for i in range(len(buffer_state['states'])):
             buffer.push(
@@ -127,10 +149,49 @@ class Checkpoint:
                 buffer_state['actions'][i],
                 buffer_state['rewards'][i],
                 buffer_state['next_states'][i],
-                buffer_state['dones'][i]
+                buffer_state['dones'][i],
             )
 
-        return payload['manager_state']
+        manager_state: Dict[str, Any] = payload.get('manager_state', {}) or {}
+
+        # ---- If snapshot is for PDERL, rebuild GA population ----
+        if payload.get("algorithm") == "pderl" and "population_state" in payload:
+            pop: List[Actor] = []
+            for a in payload["population_state"]:
+                actor = Actor(
+                    kind=a.get("kind", "td3"),
+                    pop_id=a.get("pop_id", 0),
+                    obs_shape=a.get("obs_shape"),
+                    action_type=a.get("action_type", "continuous"),
+                    action_dim=a.get("action_dim"),
+                    hidden_dim=a.get("hidden_dim", 256),
+                    max_action=a.get("max_action", 1.0),
+                    buffer_size=a.get("buffer_size", 0),  # MiniBuffer max_steps
+                    device=agent.device,
+                )
+
+                # Load flat params (ensure correct device)
+                flat_params = a["flat_params"]
+                if not isinstance(flat_params, torch.Tensor):
+                    flat_params = torch.tensor(flat_params)
+                actor.load_flat_params(flat_params.to(agent.device))
+
+                # Restore MiniBuffer via the official API
+                buf_state = a.get("buffer_state", None)
+                if hasattr(actor.buffer, "load_state"):
+                    actor.buffer.load_state(buf_state)
+                else:
+                    # Fallback: if no API, clear to empty
+                    if hasattr(actor.buffer, "clear"):
+                        actor.buffer.clear()
+
+                pop.append(actor)
+
+            # Attach reconstructed population to manager_state
+            manager_state = dict(manager_state)
+            manager_state["population"] = pop
+
+        return manager_state
 
     @torch.no_grad()
     def save_merged(

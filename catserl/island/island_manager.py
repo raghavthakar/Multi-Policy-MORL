@@ -371,7 +371,7 @@ class IslandManager:
             # Fill the remaining slots with crossover offsprings
             for _ in range(offsprings_to_create):
                 p1, p2 = random.sample(parents, 2)
-                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, "cpu")
+                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, self.worker.device)
                 offspring.append(child)
 
             # Select non-elites for proximal mutation with independent probability

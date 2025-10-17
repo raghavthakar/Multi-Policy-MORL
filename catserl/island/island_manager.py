@@ -294,6 +294,11 @@ class IslandManager:
                         island_id=self.island_id,
                         algorithm='td3'
                     )
+                    # Also log performance in csv
+                    self.checkpointer.log_stats(island_id=self.island_id, 
+                                                generation_number=0, 
+                                                cumulative_frames=self.trained_timesteps, 
+                                                vector_return=self._eval_policy(self.worker))
 
                 # Handle episode termination
                 if done or trunc:

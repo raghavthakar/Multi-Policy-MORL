@@ -207,17 +207,19 @@ class IslandManager:
             print(f"[Island {self.island_id}] Unknown algorithm '{self.alg_name}'. Resumed core TD3 state only.")
         
     # ---------- get a deterministic evaluation of the policy -----------
-    def _eval_policy(self, episodes_per_actor=10):
+    def _eval_policy(self, policy_to_eval=None, episodes_per_actor=10) -> np.ndarray:
         vec_return = np.zeros_like(self.w, dtype=np.float32)
         eval_env = mo_gym.make(self.cfg['env']['name'])
         for ep_num in range(episodes_per_actor):
             ret_vec, ep_len = deterministic_rollout(
-                eval_env, self.worker, store_transitions=False, max_ep_len=self.max_ep_len, other_actor=None, seed=self.seed+ep_num
+                eval_env, policy_to_eval, store_transitions=False, max_ep_len=self.max_ep_len, other_actor=None, seed=self.seed+ep_num
             )  # NOTE: Set learn=True to update actor's buffer
             vec_return += ret_vec
 
         vec_return = vec_return / episodes_per_actor
         print("Evlauated returns: ", vec_return)
+
+        return vec_return
 
     # ---------- helper: build GA genome from RL policy -----------------
     def _make_rl_actor(self):
@@ -444,7 +446,7 @@ class IslandManager:
         w : np.ndarray
             The scalarising weight vector for this island.
         """
-        self._eval_policy()
+        performance = self._eval_policy(self.worker)
         # self.pop.append(self._make_rl_actor())
         # eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

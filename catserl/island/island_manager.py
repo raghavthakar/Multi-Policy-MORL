@@ -352,7 +352,7 @@ class IslandManager:
             self.trained_timesteps += frames_rl
 
             # --- TD3 updates ---
-            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', 1000))
+            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', frames+frames_rl)) # As many updates as samples this generation
             for _ in range(updates):
                 self.worker.update()
 

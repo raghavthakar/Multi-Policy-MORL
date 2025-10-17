@@ -6,6 +6,7 @@ import re
 
 import torch
 import numpy as np
+import csv
 
 from catserl.shared.actors import Actor
 from catserl.shared.buffers import ReplayBuffer
@@ -405,3 +406,36 @@ class Checkpoint:
         meta = payload.get("meta", {})
 
         return population, critics, buffers_by_island, weights, meta
+
+    def log_stats(
+        self,
+        island_id: int,
+        generation_number: int,
+        cumulative_frames: int,
+        vector_return: np.ndarray
+    ) -> None:
+        """
+        Append stats to island_{island_id}_stats.csv with two columns:
+          - generation (int)
+          - vector_return (string: space-separated numbers in one cell)
+
+        Example cell: "[123.4 -56.7 0.001]"
+        """
+        # Ensure 1D numpy array of floats
+        if isinstance(vector_return, torch.Tensor):
+            vec = vector_return.detach().cpu().numpy().ravel().astype(float)
+        else:
+            vec = np.asarray(vector_return, dtype=float).ravel()
+
+        # Single-cell text for the vector (no commas → no CSV quoting headaches)
+        vec_str = np.array2string(vec, separator=' ', max_line_width=10**9)
+
+        stats_path = self.path / f"island_{island_id}_stats.csv"
+        file_exists = stats_path.exists()
+        mode = "a" if file_exists else "w"
+
+        with stats_path.open(mode, newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["generation", "cumulative_frames", "vector_return"])
+            writer.writerow([int(generation_number), cumulative_frames, vec_str])

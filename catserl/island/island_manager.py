@@ -315,7 +315,7 @@ class IslandManager:
             return self.trained_timesteps
 
         elif self.alg_name == 'pderl':
-            episodes = int(self.cfg['pderl'].get('episodes_per_actor', 3))
+            episodes = int(self.cfg['pderl'].get('episodes_per_actor', 1))
             num_elites = int(self.cfg['pderl'].get('num_elites', 1))
             mut_prob = float(self.cfg['pderl'].get('mutation_prob', 0.9))
             mut_sigma = float(self.cfg['pderl'].get('mutation_mag', 0.1))
@@ -355,8 +355,16 @@ class IslandManager:
             updates = int(self.cfg['pderl'].get('rl_updates_per_gen', frames+frames_rl)) # As many updates as samples this generation
             for _ in range(updates):
                 self.worker.update()
+            
+            # Log the champion
+            champion = self.pop[np.argmax([actor.fitness for actor in self.pop])]
+            self.checkpointer.log_stats(island_id=self.island_id,
+                                        generation_number=self._pderl_gen,
+                                        cumulative_frames=self.trained_timesteps,
+                                        vector_return=self._eval_policy(champion))
 
             # Elitism
+            # NOTE: elitissm is performed using fitnesses computed via unseeded rollouts
             elites = elitist_select(self.pop, num_elites=num_elites)
             parents = selection_tournament(self.pop, num_to_select=len(self.pop) - num_elites, tournament_size=3)
 

@@ -29,6 +29,7 @@ class IslandManager:
     # ------------------------------------------------------------------ #
     def __init__(self,
                  env,
+                 alg_name: str,
                  island_id: int,
                  scalar_weight: np.ndarray,
                  other_scalar_weights: List[np.ndarray],
@@ -41,6 +42,8 @@ class IslandManager:
         ----------
         env: mo_gymnasium env
             E.g.: run mo_gymnasium.make("mo-mountaincar-v0") to get an env.
+        alg_name: str
+            Name of the algorithm to run ("td3" or "pderl")
         island_id : int
             A unique identifier for the island.
         scalar_weight : np.ndarray
@@ -57,7 +60,7 @@ class IslandManager:
         self.cfg = cfg
         self.env = env
         self.rl_alg_name = 'td3'
-        self.alg_name = 'pderl'
+        self.alg_name = alg_name
         self.action_type = 'continuous'
         # -------------------------------------------------------------- #
         self.seed = seed

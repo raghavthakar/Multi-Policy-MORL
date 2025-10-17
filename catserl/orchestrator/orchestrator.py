@@ -13,6 +13,7 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "shared" / "config" / 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CATSERL Orchestrator", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG, help="Path to YAML config file.")
+    parser.add_argument("--stage1-alg", type=str, default=None, help="Which algorithm to run on each island in stage 1. Takes td3 or pderl.")
     parser.add_argument("--save-data-dir", type=Path, default=None, help="If set, save checkpoint files to this folder.")
     parser.add_argument("--resume-stage1", action='store_true', default=False, help="If set, resume Stage 1 island training from a checkpoint (from --save-data-dir).")
     parser.add_argument("--resume-stage2", action='store_true', default=False, help="If set, skip island training and load a merged checkpoint (from --save-data-dir) to start Stage 2.")
@@ -72,8 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.resume_stage2:
         # Must first train objective experts on islands.
         # Two islands with different objective weights.
-        mgr0 = IslandManager(env1, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
-        mgr1 = IslandManager(env2, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
+        mgr0 = IslandManager(env1, args.stage1_alg, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
+        mgr1 = IslandManager(env2, args.stage1_alg, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
 
         # If the resume flag is set, load the state for each manager.
         if args.resume_stage1:

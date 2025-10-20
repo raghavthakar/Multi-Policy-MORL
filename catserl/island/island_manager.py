@@ -463,6 +463,10 @@ class IslandManager:
             The scalarising weight vector for this island.
         """
         performance = self._eval_policy(self.worker)
-        # self.pop.append(self._make_rl_actor())
-        # eval_pop.eval_pop(self.pop, eval_env, [1,1], episodes_per_actor=10, max_ep_len=self.max_ep_len)
+        
+        # Export the rl actor as a population if running td3
+        # Else self.pop will already be populated
+        if self.alg_name == 'td3':
+            self.pop = [self._make_rl_actor()]
+
         return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w

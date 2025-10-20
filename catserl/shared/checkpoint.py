@@ -298,114 +298,108 @@ class Checkpoint:
 
     @torch.no_grad()
     def load_merged(self, device: torch.device | str = "cpu", timestep: Optional[int] = None):
-        """Loads and reconstructs the population, critics, and island buffers.
-
-        If timestep is None, this will search the save directory for files matching
-        '<stem>_t{N}{suffix}' and pick the one with the largest N. If no matching
-        files are found but the legacy self.file_path exists, it will fall back to that.
-        If a specific timestep is provided, the loader will attempt to open the
-        corresponding file and raise FileNotFoundError if it doesn't exist.
-        """
-        # Determine which file to load
+        """Load population, critics, and island buffers saved by save_merged (current format)."""
         if not self.path.exists():
             raise FileNotFoundError(f"Checkpoint directory not found: {self.path}")
 
-        # Helper to build filename for a given ts
         def _path_for_ts(ts: int) -> Path:
-            name = f"{self._merged_stem}_t{int(ts)}{self._merged_suffix}"
-            return self.path / name
+            return self.path / f"{self._merged_stem}_t{int(ts)}{self._merged_suffix}"
 
-        file_to_load: Optional[Path] = None
-
+        # Pick file
         if timestep is not None:
-            candidate = _path_for_ts(int(timestep))
-            if not candidate.exists():
-                raise FileNotFoundError(f"Requested merged checkpoint not found: {candidate}")
-            file_to_load = candidate
+            file_to_load = _path_for_ts(int(timestep))
+            if not file_to_load.exists():
+                raise FileNotFoundError(f"Requested merged checkpoint not found: {file_to_load}")
         else:
-            # find all files matching pattern and pick the highest timestep
             pattern = re.compile(re.escape(self._merged_stem) + r"_t(\d+)" + re.escape(self._merged_suffix) + r"$")
             matches: Dict[int, Path] = {}
             for p in self.path.iterdir():
-                if not p.is_file():
-                    continue
-                m = pattern.search(p.name)
-                if m:
-                    ts_val = int(m.group(1))
-                    matches[ts_val] = p
-            if matches:
-                latest_ts = max(matches.keys())
-                file_to_load = matches[latest_ts]
-            else:
-                # fallback to legacy single-file
+                if p.is_file():
+                    m = pattern.search(p.name)
+                    if m:
+                        matches[int(m.group(1))] = p
+            if not matches:
+                # fall back to legacy fixed name only if present; otherwise fail
                 if self.file_path.exists():
                     file_to_load = self.file_path
                 else:
                     raise FileNotFoundError(f"No merged checkpoint files found in: {self.path}")
+            else:
+                file_to_load = matches[max(matches.keys())]
 
         payload = torch.load(file_to_load, map_location="cpu", weights_only=False)
+        print(f"[Checkpoint] Loaded data file: {file_to_load}")
 
-        if payload.get("version") != self.VERSION:
-            raise RuntimeError(f"Checkpoint version mismatch: expected {self.VERSION}")
-
-        print(f"[Checkpoinit] Loaded data fle: {file_to_load}")
-
-        # --- Load Actors (unchanged) ---
-        population = []
-        for actor_data in payload["actors"]:
+        # --- Actors + MiniBuffers (current format) ---
+        population: List[Actor] = []
+        for ad in payload["actors"]:
             actor = Actor(
-                kind=actor_data['kind'],
-                pop_id=actor_data["pop_id"],
-                obs_shape=actor_data["obs_shape"],
-                action_type=actor_data["action_type"],
-                action_dim=actor_data["action_dim"],
-                hidden_dim=actor_data["hidden_dim"],
-                max_action=actor_data.get("max_action", 1.0),
-                buffer_size=actor_data["buffer"]["max_steps"],
+                kind=ad["kind"],
+                pop_id=ad["pop_id"],
+                obs_shape=ad["obs_shape"],
+                action_type=ad["action_type"],
+                action_dim=ad["action_dim"],
+                hidden_dim=ad["hidden_dim"],
+                max_action=ad.get("max_action", 1.0),
+                buffer_size=ad["buffer"]["max_steps"],
                 device=device,
             )
-            actor.load_flat_params(actor_data["flat"].to(device))
-            # ... (Restore MiniBuffer state) ...
-            buf_data = actor_data["buffer"]
-            actor.buffer.states = buf_data["states"]
-            actor.buffer.actions = buf_data["actions"]
-            actor.buffer.rewards = buf_data["rewards"]
-            actor.buffer.next_states = buf_data["next_states"]
-            actor.buffer.dones = buf_data["dones"]
-            actor.buffer.ptr = buf_data["ptr"]
+
+            flat = ad["flat"]
+            if not isinstance(flat, torch.Tensor):
+                flat = torch.tensor(flat)
+            actor.load_flat_params(flat.to(device))
+
+            # ---- MiniBuffer restore (derive 'full' if missing) ----
+            buf = ad["buffer"] or {}
+            # Compute 'full' robustly from arrays + ptr:
+            # If any valid-looking content exists in indices [ptr:max_steps), we assume wraparound happened → full=True.
+            ptr = int(buf.get("ptr", 0))
+            max_steps = int(buf.get("max_steps", actor.buffer.max_steps))
+            states = buf.get("states", None)
+
+            # Heuristic to detect wraparound: look for any non-zero in the tail.
+            inferred_full = False
+            if isinstance(states, np.ndarray) and max_steps > 0:
+                tail = states[ptr:max_steps]
+                # any axis nonzero -> filled beyond ptr
+                inferred_full = np.any(tail != 0)
+
+            state_dict = {
+                "states": buf["states"],
+                "actions": buf["actions"],
+                "rewards": buf["rewards"],
+                "next_states": buf["next_states"],
+                "dones": buf["dones"],
+                "ptr": ptr,
+                "full": bool(buf.get("full", inferred_full)),
+            }
+            actor.buffer.load_state(state_dict)
+
             population.append(actor)
 
-        # --- Load and reconstruct the large island ReplayBuffers ---
-        buffers_by_island = {}
-        for island_id_str, buffer_data in payload.get('island_buffers', {}).items():
-            # 1. Create a new, empty ReplayBuffer with the saved metadata
-            new_buffer = ReplayBuffer(
-                obs_shape=buffer_data['obs_shape'],
-                action_type=buffer_data['action_type'],
-                action_dim=buffer_data['action_dim'],
-                capacity=buffer_data['capacity'],
-                device=device
+        # --- Island ReplayBuffers (large) ---
+        buffers_by_island: Dict[int, ReplayBuffer] = {}
+        for island_id_str, bd in payload["island_buffers"].items():
+            rb = ReplayBuffer(
+                obs_shape=bd["obs_shape"],
+                action_type=bd["action_type"],
+                action_dim=bd["action_dim"],
+                capacity=int(bd["capacity"]),
+                device=device if isinstance(device, torch.device) else torch.device(device),
             )
+            S, A, R, S2, D = bd["states"], bd["actions"], bd["rewards"], bd["next_states"], bd["dones"]
+            for i in range(len(S)):
+                rb.push(S[i], A[i], R[i], S2[i], D[i])
+            buffers_by_island[int(island_id_str)] = rb
 
-            # 2. Unpack the saved data arrays
-            states = buffer_data['states']
-            actions = buffer_data['actions']
-            rewards = buffer_data['rewards']
-            next_states = buffer_data['next_states']
-            dones = buffer_data['dones']
-
-            # 3. Re-populate the buffer by pushing each saved transition
-            for i in range(len(states)):
-                new_buffer.push(states[i], actions[i], rewards[i], next_states[i], dones[i])
-
-            buffers_by_island[int(island_id_str)] = new_buffer
-
+        # --- Critics / weights / meta ---
         critics = {int(k): v.to(device) for k, v in payload["critics"].items()}
-        # Convert weights back to numpy arrays
         weights = {int(k): np.array(v) for k, v in payload["weights"].items()}
         meta = payload.get("meta", {})
 
         return population, critics, buffers_by_island, weights, meta
+
 
     def log_stats(
         self,

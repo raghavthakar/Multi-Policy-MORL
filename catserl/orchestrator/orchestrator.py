@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--save-data-dir", type=Path, default=None, help="If set, save checkpoint files to this folder.")
     parser.add_argument("--resume-stage1", action='store_true', default=False, help="If set, resume Stage 1 island training from a checkpoint (from --save-data-dir).")
     parser.add_argument("--resume-stage2", action='store_true', default=False, help="If set, skip island training and load a merged checkpoint (from --save-data-dir) to start Stage 2.")
+    parser.add_argument("--make-sparse-env", action='store_true', default=False, help="If set, rewards will be summed per episode and provided only when episode ends.")
 
     args = parser.parse_args(argv)
 
@@ -44,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         from catserl.island.island_manager import IslandManager
         from catserl.shared.checkpoint import Checkpoint
         from catserl.moea.mo_manager import MOManager
+        from catserl.orchestrator.sparse_mo_gym_wrapper import SparseMultiObjectiveRewardWrapper
     except Exception as e:
         print(f"Failed to import runtime dependencies: {e}", file=sys.stderr)
         return 2
@@ -51,8 +53,11 @@ def main(argv: list[str] | None = None) -> int:
     seed = int(cfg.get("seed", 2024))
     device = torch.device(cfg.get("device", "cpu"))
 
-    env1 = mo_gym.make(cfg['env']['name'])
-    env2 = mo_gym.make(cfg['env']['name'])
+    base_env1 = mo_gym.make(cfg['env']['name'])
+    base_env2 = mo_gym.make(cfg['env']['name'])
+
+    env1 = SparseMultiObjectiveRewardWrapper(base_env1) if args.make_sparse_env else base_env1
+    env2 = SparseMultiObjectiveRewardWrapper(base_env2) if args.make_sparse_env else base_env2
 
     # Seeding
     random.seed(seed)

@@ -253,7 +253,7 @@ class IslandManager:
                 self._training_stats.set(state, None, 0, 0, True)
 
             # --- Training Loop ---
-            for _ in range(steps_to_train):
+            for trained_steps in range(steps_to_train):
                 state, ep_return_vec, ep_len, episodes_completed, random_action = self._training_stats.get()
                 
                 # Use random actions for the start-up period, otherwise use the policy.
@@ -263,7 +263,7 @@ class IslandManager:
                     action = self.worker.act(state, noisy_action=True)
 
                 # Step the environment
-                next_state, reward_vec, done, trunc, _ = self.env.step(action)
+                next_state, reward_vec, done, trunc, info = self.env.step(action)
                 
                 # Store the transition in the agent's buffer
                 self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)

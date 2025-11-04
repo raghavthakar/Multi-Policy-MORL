@@ -319,7 +319,7 @@ class IslandManager:
                 # Handle episode termination
                 if done or trunc:
                     scalar_return = (ep_return_vec * self.w).sum()
-                    print(f"[Island {self.island_id}] Steps: {self.trained_timesteps}, Ep: {episodes_completed+1}, Len: {ep_len}, Return: {scalar_return:.2f}")
+                    print(f"[Island {self.island_id}] Steps: {self.trained_timesteps}, Ep: {episodes_completed+1}, Len: {ep_len}, Return: {scalar_return}")
                     
                     self.scalar_returns.append(scalar_return)
                     self.vector_returns.append(ep_return_vec)

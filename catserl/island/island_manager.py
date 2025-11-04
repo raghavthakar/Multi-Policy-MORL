@@ -15,6 +15,7 @@ from catserl.shared import checkpoint
 from catserl.shared.evo_utils.selection import elitist_select, selection_tournament
 from catserl.shared.evo_utils.proximal_mutation import proximal_mutate
 from catserl.shared.evo_utils.crossover import basic_crossover, distilled_crossover
+from catserl.shared.re3 import RE3
 
 
 class IslandManager:
@@ -116,6 +117,11 @@ class IslandManager:
                                      device=device) for _ in range(cfg['pderl']['pop_size'])]
             self._pderl_gen = 0
             self._num_checkpts = 0 # How many island snapshots have been saved
+        
+        # Should we use RE3 exploration?
+        self.use_re3 = True
+        if self.use_re3:
+            self.re3 = RE3(obs_shape=self.env.observation_space.shape)
 
     class TrainingStats:
         "Persistent training variables that allow control to pop in and out of the train() method."
@@ -264,15 +270,22 @@ class IslandManager:
 
                 # Step the environment
                 next_state, reward_vec, done, trunc, info = self.env.step(action)
-                
-                # Store the transition in the agent's buffer
-                self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
 
-                # Accumulate episode rewards
+                # Accumulate extrinsic episode rewards
                 if ep_return_vec is None:
                     ep_return_vec = np.array(reward_vec, dtype=np.float32)
                 else:
                     ep_return_vec += reward_vec
+
+                # If set, augment reward vector with intrinsic reward computed using RE3
+                if self.use_re3 and self.trained_timesteps > start_timesteps:
+                    batch = self.worker.agent.buffer.sample(512)
+                    r_int = self.re3.compute_intrinsic(torch.from_numpy(state).float().to(self.worker.device), batch)
+                    r_int_vec = np.full_like(reward_vec, r_int)
+                    reward_vec += r_int_vec
+
+                # Store the transition in the agent's buffer (with intrinsic reward included)
+                self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
 
                 state = next_state
                 ep_len += 1

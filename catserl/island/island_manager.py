@@ -36,6 +36,7 @@ class IslandManager:
                  other_scalar_weights: List[np.ndarray],
                  cfg: Dict,
                  checkpointer: checkpoint.Checkpoint = None,
+                 use_re3: bool = False,
                  seed: int = 2024,
                  device: torch.device = 'cpu'):
         """
@@ -119,7 +120,7 @@ class IslandManager:
             self._num_checkpts = 0 # How many island snapshots have been saved
         
         # Should we use RE3 exploration?
-        self.use_re3 = True
+        self.use_re3 = use_re3
         if self.use_re3:
             self.re3 = RE3(obs_shape=self.env.observation_space.shape)
 

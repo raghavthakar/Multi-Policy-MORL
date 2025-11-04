@@ -78,8 +78,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.resume_stage2:
         # Must first train objective experts on islands.
         # Two islands with different objective weights.
-        mgr0 = IslandManager(env1, args.stage1_alg, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, seed=seed + 1, device=device)
-        mgr1 = IslandManager(env2, args.stage1_alg, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, seed=seed + 2, device=device)
+        mgr0 = IslandManager(env1, args.stage1_alg, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, use_re3=True,  seed=seed + 1, device=device)
+        mgr1 = IslandManager(env2, args.stage1_alg, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, use_re3=False, seed=seed + 2, device=device)
 
         # If the resume flag is set, load the state for each manager.
         if args.resume_stage1:

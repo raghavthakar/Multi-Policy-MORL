@@ -12,9 +12,6 @@ from catserl.shared.rollout import deterministic_rollout
 from catserl.shared import actors
 from catserl.shared.evo_utils import eval_pop
 from catserl.shared import checkpoint
-from catserl.shared.evo_utils.selection import elitist_select, selection_tournament
-from catserl.shared.evo_utils.proximal_mutation import proximal_mutate
-from catserl.shared.evo_utils.crossover import basic_crossover, distilled_crossover
 from catserl.shared.re3 import RE3
 
 
@@ -45,7 +42,7 @@ class IslandManager:
         env: mo_gymnasium env
             E.g.: run mo_gymnasium.make("mo-mountaincar-v0") to get an env.
         alg_name: str
-            Name of the algorithm to run ("td3" or "pderl")
+            Name of the algorithm to run ("td3")
         island_id : int
             A unique identifier for the island.
         scalar_weight : np.ndarray
@@ -105,19 +102,6 @@ class IslandManager:
         # TD3-specific parameters
         self.update_every_n_steps = cfg['rl']['update_every_n_steps'] # aka training frequency
         self.updates_per_session = cfg['rl']['updates_per_session'] # aka training epochs
-    
-        # PDERL-specific parameters
-        if self.alg_name == 'pderl':
-            self.pop = [actors.Actor(kind='td3',
-                                     pop_id=0,
-                                     obs_shape=self.env.observation_space.shape, 
-                                     action_type=self.action_type, 
-                                     action_dim=self.action_dim, 
-                                     hidden_dim=256, 
-                                     max_action=self.max_action, 
-                                     device=device) for _ in range(cfg['pderl']['pop_size'])]
-            self._pderl_gen = 0
-            self._num_checkpts = 0 # How many island snapshots have been saved
         
         # Should we use RE3 exploration?
         self.use_re3 = use_re3
@@ -155,9 +139,6 @@ class IslandManager:
 
         TD3:
         - Restores agent, replay buffer, trained_timesteps, and training_stats (if present).
-        PDERL:
-        - Restores agent and replay buffer (via loader), trained_timesteps, _pderl_gen,
-            and reconstructs self.pop from the saved GA population.
         """
         if not self.checkpointer:
             print(f"[Island {self.island_id}] No checkpointer provided, cannot resume.")
@@ -196,22 +177,6 @@ class IslandManager:
                 except Exception:
                     pass  # Non-fatal; resume without mid-episode state
             print(f"[Island {self.island_id}] (TD3) Resumed training from timestep {self.trained_timesteps}.")
-
-        elif self.alg_name == 'pderl':
-            # Rehydrate GA population (the loader injected it into manager_state)
-            pop = manager_state.get('population', None)
-            if pop is not None:
-                self.pop = pop
-            else:
-                print(f"[Island {self.island_id}] (PDERL) Warning: snapshot missing population; continuing with existing self.pop.")
-
-            # Restore generation counter if present
-            self._pderl_gen = manager_state.get('_pderl_gen', getattr(self, '_pderl_gen', 0))
-
-            # PDERL doesn't use episodic TD3 TrainingStats; reset it to a clean slate
-            self._training_stats = self.TrainingStats()
-
-            print(f"[Island {self.island_id}] (PDERL) Resumed training from timestep {self.trained_timesteps}, gen {self._pderl_gen}.")
 
         else:
             print(f"[Island {self.island_id}] Unknown algorithm '{self.alg_name}'. Resumed core TD3 state only.")
@@ -334,112 +299,6 @@ class IslandManager:
                 # Update persistent variables
                 self._training_stats.set(state, ep_return_vec, ep_len, episodes_completed, random_action)
             
-            return self.trained_timesteps
-
-        elif self.alg_name == 'pderl':
-            episodes = int(self.cfg['pderl'].get('episodes_per_actor', 1))
-            num_elites = int(self.cfg['pderl'].get('num_elites', 1))
-            mut_prob = float(self.cfg['pderl'].get('mutation_prob', 0.9))
-            mut_sigma = float(self.cfg['pderl'].get('mutation_mag', 0.1))
-            mut_batch = int(self.cfg['pderl'].get('mutation_batch_size', 256))
-
-            # Evaluate population and refresh per-actor buffers for operators
-            frames = eval_pop.eval_pop(
-                pop=self.pop,
-                env=self.env,
-                weight_vector=self.w,
-                episodes_per_actor=episodes,
-                max_ep_len=self.max_ep_len,
-                rl_worker=self.worker,
-                seed=None,
-                store_transitions=True,
-            )
-            self.trained_timesteps += frames
-
-            # Assign scalar fitness for selection
-            for actor in self.pop:
-                actor.fitness = float(actor.vector_return @ self.w)
-            
-            # --- TD3 rollout (one episode) ---
-            frames_rl = 0
-            state, _ = self.env.reset(seed=None)
-            done = False
-            trunc = False
-            while not (done or trunc):
-                action = self.worker.act(state, noisy_action=True)
-                next_state, reward_vec, done, trunc, _ = self.env.step(action)
-                self.worker.remember(state, action, np.array(reward_vec, dtype=np.float32), next_state, done or trunc)
-                state = next_state
-                frames_rl += 1
-            self.trained_timesteps += frames_rl
-
-            # --- TD3 updates ---
-            updates = int(self.cfg['pderl'].get('rl_updates_per_gen', frames+frames_rl)) # As many updates as samples this generation
-            for _ in range(updates):
-                self.worker.update()
-            
-            # Log the champion
-            champion = self.pop[np.argmax([actor.fitness for actor in self.pop])]
-            self.checkpointer.log_stats(island_id=self.island_id,
-                                        generation_number=self._pderl_gen,
-                                        cumulative_frames=self.trained_timesteps,
-                                        vector_return=self._eval_policy(champion))
-
-            # Elitism
-            # NOTE: elitissm is performed using fitnesses computed via unseeded rollouts
-            elites = elitist_select(self.pop, num_elites=num_elites)
-            parents = selection_tournament(self.pop, num_to_select=len(self.pop) - num_elites, tournament_size=3)
-
-            # Create offsprings through RL->EA migration or crossover
-            offspring = []
-
-            period = int(self.cfg['pderl'].get('rl_to_ea_sync_period', 1))
-            # if time to sync, then create rl actor policy from worker
-            if period > 0 and (self._pderl_gen % period) == 0:
-                offspring.append(self._make_rl_actor())
-            
-            offsprings_to_create = len(self.pop) - num_elites - len(offspring) # account for if RL->EA migration occured
-            
-            # Fill the remaining slots with crossover offsprings
-            for _ in range(offsprings_to_create):
-                p1, p2 = random.sample(parents, 2)
-                child = distilled_crossover(p1, p2, self.worker.critic(), self.w, self.cfg, self.worker.device)
-                offspring.append(child)
-
-            # Select non-elites for proximal mutation with independent probability
-            proximal_mutate(
-                pop=offspring,
-                critic=self.worker.critic(),
-                main_scalar_weight=self.w,
-                sigma=self.cfg.get('mutation_mag', 0.1),
-                batch_size=self.cfg.get('mutation_batch_size', 256)
-            )            
-
-            # New population replacement
-            self.pop = elites + offspring
-
-            # Check if time to checkpoint
-            if self.trained_timesteps > 0 and self.trained_timesteps // self.timesteps_between_checkpoints > self._num_checkpts:
-                self._num_checkpts = self.trained_timesteps // self.timesteps_between_checkpoints # Update num checkpoints saved
-            
-                # --- Checkpointing ---
-                manager_state = {
-                    'trained_timesteps': self.trained_timesteps,
-                    '_pderl_gen': self._pderl_gen
-                    # NOTE: _training_stats is not used by PDERL, so we don't save it.
-                }
-                self.checkpointer.save_island_snapshot(
-                    manager_state=manager_state,
-                    island_id=self.island_id,
-                    algorithm='pderl',
-                    agent=self.worker.agent,
-                    buffer=self.worker.buffer(),
-                    population=self.pop
-                )
-
-            # Track generation count once per PDERL iteration
-            self._pderl_gen += 1
-
             return self.trained_timesteps
 
         else:

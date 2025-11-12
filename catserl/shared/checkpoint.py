@@ -11,6 +11,7 @@ import csv
 from catserl.shared.actors import Actor
 from catserl.shared.buffers import ReplayBuffer
 from catserl.shared.rl import TD3
+from catserl.shared import data_loader
 
 class Checkpoint:
     """Handles saving and loading of training states."""
@@ -297,7 +298,7 @@ class Checkpoint:
             pass
 
     @torch.no_grad()
-    def load_merged(self, device: torch.device | str = "cpu", timestep: Optional[int] = None):
+    def _load_merged(self, device: torch.device | str = "cpu", timestep: Optional[int] = None):
         """Load population, critics, and island buffers saved by save_merged (current format)."""
         if not self.path.exists():
             raise FileNotFoundError(f"Checkpoint directory not found: {self.path}")
@@ -399,6 +400,12 @@ class Checkpoint:
         meta = payload.get("meta", {})
 
         return population, critics, buffers_by_island, weights, meta
+    
+    def load_checkpoint(self, device: torch.device):
+        try:
+            return self._load_merged(device=device)
+        except:
+            return data_loader._load_mopderl_data(root_dir=self.path, device=device)
 
 
     def log_stats(

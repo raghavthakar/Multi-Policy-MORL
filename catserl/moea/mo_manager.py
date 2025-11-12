@@ -57,7 +57,7 @@ class MOManager:
         # Load all components from the end of the island stage.
         print(f"[MOManager] Loading merged checkpoint from: {ckpt_path}")
         ckpt = Checkpoint(ckpt_path)
-        pop, critics, buffers, _, _ = ckpt.load_merged(device=self.device)
+        pop, critics, buffers, _, _ = ckpt.load_checkpoint(device=self.device)
 
         self.population = pop
         self.critics = critics

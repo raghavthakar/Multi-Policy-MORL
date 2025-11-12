@@ -10,13 +10,13 @@ import numpy as np
 import torch
 
 from catserl.shared import actors
-from catserl.shared import buffers
+from catserl.shared.buffers import ReplayBuffer
 
 # Add MOPDERL to system path
 mopderl_dir = os.path.abspath("/home/raghav/Research/mopderl-env/mopderl")
 sys.path.append(mopderl_dir)
 
-import MOPDERL.ddpg
+from MOPDERL import ddpg, replay_memory
 
 # --------------------------------------------------------------------------
 # Private: MOPDERL Loader
@@ -50,15 +50,15 @@ def _parse_mopderl_info_txt(info_file: Path) -> SimpleNamespace:
 
 
 def _load_mopderl_data(
-    ckpt_dir: Path, device: torch.device
-) -> Tuple[List[actors.Actor], Dict[int, torch.nn.Module], Dict[int, buffers.ReplayBuffer]]:
+    root_dir: Path, device: torch.device
+) -> Tuple[List[actors.Actor], Dict[int, torch.nn.Module], Dict[int, ReplayBuffer]]:
     """
     Loads and translates data from the MOPDERL checkpoint format.
     """
-    print(f"[Stage1Loader] Loading MOPDERL data from: {ckpt_dir}")
+    print(f"[Stage1Loader] Loading MOPDERL data from: {root_dir}")
 
     # 1. Load MOPDERL config ('args') from info.txt
-    info_file = ckpt_dir / "info.txt"
+    info_file = root_dir / "info.txt"
     args = _parse_mopderl_info_txt(info_file)
 
     # CRITICAL: Override the device from the file with the one requested
@@ -68,8 +68,9 @@ def _load_mopderl_data(
     # Initialize the data structures we need to return
     population: List[actors.Actor] = []
     critics: Dict[int, torch.nn.Module] = {}
-    buffers: Dict[int, buffers.ReplayBuffer] = {}
+    buffers: Dict[int, ReplayBuffer] = {}
 
+    ckpt_dir = root_dir / "checkpoint"
     warm_up_dir = ckpt_dir / "warm_up"
     agents_dir = warm_up_dir / "rl_agents"
 
@@ -135,14 +136,14 @@ def _load_mopderl_data(
 
         # --- 5. Translate Buffer ---
         # Load MOPDERL buffer
-        mopderl_buf = buffers.ReplayMemory(
+        mopderl_buf = replay_memory.ReplayMemory(
             capacity=args.buffer_size,
             device="cpu"  # Load to CPU first
         )
         mopderl_buf.load_info(buffer_file)
 
-        # Create a new catserl.buffers.ReplayBuffer
-        catserl_buf = buffers.ReplayBuffer(
+        # Create a new catserl.ReplayBuffer
+        catserl_buf = ReplayBuffer(
             obs_shape=(args.state_dim,),
             action_type="continuous",
             action_dim=args.action_dim,
@@ -169,9 +170,4 @@ def _load_mopderl_data(
         f"critics, {len(buffers)} buffers (MOPDERL)."
     )
 
-    return population, critics, buffers
-
-if __name__ == "__main__":
-    print("cc")
-    ckpt_path = Path('/home/raghav/Research/mopderl-env/bruh/weightconditioned/MO-HalfCheetah-V2/run_0')
-    _load_mopderl_data(ckpt_path, 'cpu')
+    return population, critics, buffers, 10, 10

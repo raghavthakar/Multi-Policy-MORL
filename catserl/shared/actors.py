@@ -165,5 +165,10 @@ class Actor:
 			buffer_size=self.buffer.max_steps,
 			device=self._impl.device,
 		)
-		twin.load_flat_params(self.flat_params())
+		twin._impl.net = copy.deepcopy(self.policy)
+        
+        # Also ensure max_action is consistent, as the MOPDERL
+        # graft might have a different one.
+		twin._impl.max_action = self.max_action
+
 		return twin

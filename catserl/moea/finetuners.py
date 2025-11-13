@@ -132,8 +132,16 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
                 w_batch = w_vec.expand(n_subset, -1)
                 s_conditioned = torch.cat([s_subset, w_batch], 1)
                 
-                q_sa = self._min_q(critic, s_conditioned, a_subset)
-                v_s  = self._min_q(critic, s_conditioned, mu_subset)
+                if hasattr(critic, 'Q1'):
+                    # Bespoke TD3 Critic path
+                    q_sa = self._min_q(critic, s_conditioned, a_subset)
+                    v_s  = self._min_q(critic, s_conditioned, mu_subset)
+                else:
+                    # MOPDERL DDPG Critic path
+                    # We must squeeze the [N, 1] output to [N]
+                    q_sa = critic(s_conditioned, a_subset).squeeze(-1)
+                    v_s = critic(s_conditioned, mu_subset).squeeze(-1)
+                
                 advs[obj_idx, origin_mask] = q_sa - v_s
 
         # Normalize advantages per-objective to align their scales.

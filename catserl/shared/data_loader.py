@@ -13,7 +13,7 @@ from catserl.shared import actors
 from catserl.shared.buffers import ReplayBuffer
 
 # Add MOPDERL to system path
-mopderl_dir = os.path.abspath("/home/raghav/Research/mopderl-env/mopderl")
+mopderl_dir = os.path.abspath("/nfs/stak/users/thakarr/hpc-share/mopderl-env/mopderl-mo-gymnasium")
 sys.path.append(mopderl_dir)
 
 from MOPDERL import ddpg, replay_memory

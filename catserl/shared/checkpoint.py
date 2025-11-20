@@ -400,12 +400,19 @@ class Checkpoint:
         meta = payload.get("meta", {})
 
         return population, critics, buffers_by_island, weights, meta
-    
+
     def load_checkpoint(self, device: torch.device):
         try:
+            self.loaded_mopderl_slow = False
+            self.loaded_catserl_fast = True
             return self._load_merged(device=device)
         except:
-            return data_loader._load_mopderl_data(root_dir=self.path, device=device)
+            try:
+                return data_loader._load_merged_mopderl(root_dir=self.path, merged_stem=self._merged_stem, merged_suffix=self._merged_suffix, device=device)
+            except:
+                self.loaded_mopderl_slow = True
+                self.loaded_catserl_fast = False
+                return data_loader._load_mopderl_data(root_dir=self.path, device=device)
 
 
     def log_stats(

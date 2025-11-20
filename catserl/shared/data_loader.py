@@ -169,3 +169,117 @@ def _load_mopderl_data(
 
     print(f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} critics, {len(buffers)} buffers (MOPDERL).")
     return population, critics, buffers, weights, 10
+
+
+@torch.no_grad()
+def _load_merged_mopderl(root_dir: Path, merged_stem: str, merged_suffix: str, device: torch.device | str = "cpu", timestep: Optional[int] = None):
+    """
+    Fast Loader for Cached MOPDERL Data.
+    
+    Uses info.txt to strictly reconstruct the MOPDERL architecture
+    before loading the cached flat parameters.
+    """
+    # 1. Verify Root
+    if not root_dir.exists():
+        raise FileNotFoundError(f"Checkpoint directory not found: {root_dir}")
+
+    # 2. Retrieve info.txt args (Ground Truth for Architecture)
+    info_file = root_dir / "info.txt"
+    if not info_file.exists():
+        raise FileNotFoundError(f"Cannot reconstruct MOPDERL architecture: {info_file} is missing.")
+    
+    # Parse the args that MOPDERL expects (state_dim, ls, use_ln, etc.)
+    mopderl_args = _parse_mopderl_info_txt(info_file)
+    mopderl_args.device = device  # Enforce correct device
+
+    # 3. Find the cache file
+    def _path_for_ts(ts: int) -> Path:
+        return root_dir / f"{merged_stem}_t{int(ts)}{merged_suffix}"
+
+    if timestep is not None:
+        file_to_load = _path_for_ts(int(timestep))
+    else:
+        pattern = re.compile(re.escape(merged_stem) + r"_t(\d+)" + re.escape(merged_suffix) + r"$")
+        matches: Dict[int, Path] = {}
+        for p in root_dir.iterdir():
+            if p.is_file():
+                m = pattern.search(p.name)
+                if m: matches[int(m.group(1))] = p
+        if not matches:
+            raise FileNotFoundError(f"No merged checkpoint files found in: {root_dir}")
+        file_to_load = matches[max(matches.keys())]
+
+    print(f"[Checkpoint] Loading MOPDERL-based cache file: {file_to_load}")
+    payload = torch.load(file_to_load, map_location="cpu", weights_only=False)
+
+    # 4. Reconstruct Population
+    population: List[actors.Actor] = []
+    for ad in payload["actors"]:
+        # A. Initialize Standard Wrapper (Shell)
+        actor = actors.Actor(
+            kind=ad["kind"], pop_id=ad["pop_id"],
+            obs_shape=ad["obs_shape"], action_type=ad["action_type"],
+            action_dim=ad["action_dim"], hidden_dim=ad["hidden_dim"],
+            max_action=ad.get("max_action", 1.0), buffer_size=ad["buffer"]["max_steps"],
+            device=device,
+        )
+
+        # B. Hydrate MOPDERL Architecture
+        # We use `mopderl_args` (from info.txt) to ensure `use_ln` and exact dimensions are respected.
+        try:
+            mopderl_net = ddpg.Actor(mopderl_args).to(device)
+            mopderl_net.eval()
+            
+            # Perform the swap
+            actor._impl.net = mopderl_net
+            actor._impl.max_action = 1.0
+        except Exception as e:
+            print(f"[Checkpoint] Error reconstructing MOPDERL network using info.txt args: {e}")
+            raise RuntimeError("Failed to hydrate MOPDERL architecture.")
+
+        # C. Load Parameters
+        flat = ad["flat"]
+        if not isinstance(flat, torch.Tensor):
+            flat = torch.tensor(flat)
+        
+        # This should now work perfectly as dimensions and flags (LN) match exactly
+        actor.load_flat_params(flat.to(device))
+
+        # D. Restore MiniBuffer
+        buf = ad["buffer"] or {}
+        ptr = int(buf.get("ptr", 0))
+        max_steps = int(buf.get("max_steps", actor.buffer.max_steps))
+        states = buf.get("states", None)
+        inferred_full = False
+        if isinstance(states, np.ndarray) and max_steps > 0:
+            tail = states[ptr:max_steps]
+            inferred_full = np.any(tail != 0)
+
+        state_dict = {
+            "states": buf["states"], "actions": buf["actions"],
+            "rewards": buf["rewards"], "next_states": buf["next_states"],
+            "dones": buf["dones"], "ptr": ptr,
+            "full": bool(buf.get("full", inferred_full)),
+        }
+        actor.buffer.load_state(state_dict)
+        population.append(actor)
+
+    # 5. Load Island Buffers
+    buffers_by_island: Dict[int, ReplayBuffer] = {}
+    for island_id_str, bd in payload["island_buffers"].items():
+        rb = ReplayBuffer(
+            obs_shape=bd["obs_shape"], action_type=bd["action_type"],
+            action_dim=bd["action_dim"], capacity=int(bd["capacity"]),
+            device=device if isinstance(device, torch.device) else torch.device(device),
+        )
+        S, A, R, S2, D = bd["states"], bd["actions"], bd["rewards"], bd["next_states"], bd["dones"]
+        for i in range(len(S)):
+            rb.push(S[i], A[i], R[i], S2[i], D[i])
+        buffers_by_island[int(island_id_str)] = rb
+
+    # 6. Load Critics and Metadata
+    critics = {int(k): v.to(device) for k, v in payload["critics"].items()}
+    weights = {int(k): np.array(v) for k, v in payload["weights"].items()}
+    meta = payload.get("meta", {})
+
+    return population, critics, buffers_by_island, weights, meta

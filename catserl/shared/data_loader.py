@@ -4,7 +4,7 @@ import ast
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 
 import numpy as np
 import torch
@@ -69,6 +69,7 @@ def _load_mopderl_data(
     population: List[actors.Actor] = []
     critics: Dict[int, torch.nn.Module] = {}
     buffers: Dict[int, ReplayBuffer] = {}
+    weights: Dict[int, List[int]] = {}
 
     ckpt_dir = root_dir / "checkpoint"
     warm_up_dir = ckpt_dir / "warm_up"
@@ -164,10 +165,7 @@ def _load_mopderl_data(
             catserl_buf.push(s, a, r, s2, d)
 
         buffers[island_id] = catserl_buf
+        weights[island_id] = np.array([1 if i == island_id else 0 for i in range(args.num_rl_agents)])
 
-    print(
-        f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} "
-        f"critics, {len(buffers)} buffers (MOPDERL)."
-    )
-
-    return population, critics, buffers, 10, 10
+    print(f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} critics, {len(buffers)} buffers (MOPDERL).")
+    return population, critics, buffers, weights, 10

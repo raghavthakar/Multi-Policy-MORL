@@ -165,7 +165,7 @@ def _load_mopderl_data(
             catserl_buf.push(s, a, r, s2, d)
 
         buffers[island_id] = catserl_buf
-        weights[island_id] = np.array([0 if i == island_id else 1 for i in range(args.num_rl_agents)])
+        weights[island_id] = np.array([0 if i == island_id else 1 for i in range(args.num_rl_agents)]) #HACK
 
     print(f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} critics, {len(buffers)} buffers (MOPDERL).")
     return population, critics, buffers, weights, 10

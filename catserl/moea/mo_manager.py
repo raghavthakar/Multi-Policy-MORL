@@ -68,6 +68,27 @@ class MOManager:
         self.critics = critics
         self.specialist_buffers = buffers
 
+        # Store per-island scalarisation vectors (objective weights)
+        self.island_weights = weights  # Dict[int, np.ndarray]
+
+        # Sanity: assume each weight vector length == num_objectives
+        example_w = next(iter(self.island_weights.values()))
+        assert example_w.shape[0] == self.num_objectives, \
+            f"weights dimension {example_w.shape[0]} != num_objectives {self.num_objectives}"
+
+        # Build a mapping: objective j -> island that emphasises j the most
+        self.obj_to_island: Dict[int, int] = {}
+        for j in range(self.num_objectives):
+            # Pick island with largest weight on objective j
+            best_island = max(
+                self.island_weights.keys(),
+                key=lambda i: self.island_weights[i][j]
+            )
+            self.obj_to_island[j] = best_island
+
+        print(f"[MOManager] Objective → island mapping: {self.obj_to_island}")
+
+
         if not self.population:
             raise ValueError("Cannot initialize MOManager: loaded population is empty.")
 
@@ -200,7 +221,8 @@ class MOManager:
         # Determine the number of samples to draw from each specialist buffer
         # based on the target trade-off weights.
         new_buffer_size = self.cfg['child_buffer_size']
-        island_ids = sorted(self.specialist_buffers.keys())
+        # Order islands according to objective index, not dict order
+        island_ids = [self.obj_to_island[j] for j in range(self.num_objectives)]
         num_samples_per_buffer = (target_scalarisation * new_buffer_size).astype(int)
         
         print(f"Creating a new static dataset for child (ID: {child.pop_id}) with target size {new_buffer_size}.")

@@ -144,21 +144,19 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
                 
                 advs[obj_idx, origin_mask] = q_sa - v_s
 
-        # Normalize advantages per-objective to align their scales.
-        if self.adv_norm == "zscore":
-            mu  = advs.mean(dim=1, keepdim=True)
-            std = advs.std(dim=1, keepdim=True).clamp_min(1e-6)
-            norm_advs = (advs - mu) / std
-        elif self.adv_norm == "minmax":
-            mins = advs.min(dim=1, keepdim=True).values
-            maxs = advs.max(dim=1, keepdim=True).values
-            norm_advs = (advs - mins) / (maxs - mins).clamp_min(1e-8)
-        else:
-            norm_advs = advs
-        
-        # Create the final hybrid advantage by scalarizing with the target weights.
         w_target = torch.from_numpy(target_scalarisation).float().to(device).unsqueeze(1)
-        hybrid_adv = torch.sum(norm_advs * w_target, dim=0)
+        hybrid_adv = torch.sum(advs * w_target, dim=0)  # [n_samples]
+
+        # normalise *scalarised* advantages, not per-objective
+        if self.adv_norm == "zscore":
+            mu  = hybrid_adv.mean()
+            std = hybrid_adv.std().clamp_min(1e-6)
+            hybrid_adv = (hybrid_adv - mu) / std
+        elif self.adv_norm == "minmax":
+            mn = hybrid_adv.min()
+            mx = hybrid_adv.max()
+            hybrid_adv = (hybrid_adv - mn) / (mx - mn).clamp_min(1e-8)
+        
         return hybrid_adv
 
     def _train_loop(self, child: Actor, optimizer: torch.optim.Optimizer, dataset: TensorDataset) -> None:

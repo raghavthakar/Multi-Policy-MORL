@@ -172,8 +172,9 @@ class MOManager:
         self, population: List[Actor]
     ) -> Tuple[Optional[Actor], Optional[Actor]]:
         """
-        Identifies the largest adjacent gap on the Pareto front using the
-        'Sort-and-Scan' method for parent selection.
+        Selects a pair of parents corresponding to a Pareto-front gap.
+        Instead of always picking the largest gap, we sample a gap with
+        probability proportional to its Euclidean length in objective space.
         """
         evaluated_actors = [p for p in population if p.vector_return is not None]
 
@@ -188,21 +189,34 @@ class MOManager:
         # Step 2: Sort the Pareto front by the first objective to define adjacency.
         pareto_actors.sort(key=lambda p: p.vector_return[0])
 
-        # Step 3: Scan through adjacent pairs to find the largest Euclidean distance.
-        max_dist = -1.0
-        parent_a, parent_b = None, None
-
+        # Step 3: Compute all adjacent gaps.
+        gaps = []  # list of (distance, parent_a, parent_b)
         for i in range(len(pareto_actors) - 1):
             p1 = pareto_actors[i]
-            p2 = pareto_actors[i+1]
+            p2 = pareto_actors[i + 1]
             dist = np.linalg.norm(p1.vector_return - p2.vector_return)
-            
-            if dist > max_dist:
-                max_dist = dist
-                parent_a = p1
-                parent_b = p2
-        
-        return parent_a, parent_b
+            gaps.append((dist, p1, p2))
+
+        # If somehow all distances are zero, just pick a random adjacent pair.
+        total_dist = sum(d for d, _, _ in gaps)
+        if total_dist <= 0.0:
+            print("[Parent Selection] All gaps have zero length; selecting a random adjacent pair.")
+            _, p_a, p_b = random.choice(gaps)
+            return p_a, p_b
+
+        # Step 4: Roulette-wheel selection proportional to gap length.
+        r = random.random() * total_dist
+        cumulative = 0.0
+        for dist, p_a, p_b in gaps:
+            cumulative += dist
+            if r <= cumulative:
+                print(f"[Parent Selection] Sampled gap of length {dist:.4f} (total length {total_dist:.4f}).")
+                return p_a, p_b
+
+        # Numerical safety fallback: return the last gap if loop didn't return.
+        dist, p_a, p_b = gaps[-1]
+        print(f"[Parent Selection] Fallback to last gap of length {dist:.4f}.")
+        return p_a, p_b
 
     def _create_offspring(
         self,

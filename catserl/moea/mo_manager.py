@@ -56,13 +56,13 @@ class MOManager:
         
         # Load all components from the end of the island stage.
         print(f"[MOManager] Loading merged checkpoint from: {ckpt_path}")
-        ckpt = Checkpoint(ckpt_path)
-        pop, critics, buffers, weights, _ = ckpt.load_checkpoint(device=self.device)
+        self.ckpt = Checkpoint(ckpt_path)
+        pop, critics, buffers, weights, _ = self.ckpt.load_checkpoint(device=self.device)
 
         # check if loaded from mopderl
-        if ckpt.loaded_mopderl_slow == True and ckpt.loaded_catserl_fast == False:
+        if self.ckpt.loaded_mopderl_slow == True and self.ckpt.loaded_catserl_fast == False:
             # save a fast cache from mopderl save data
-            ckpt.save_merged(pop, critics, buffers, weights, self.cfg, 2024, 4000000)
+            self.ckpt.save_merged(pop, critics, buffers, weights, self.cfg, 2024, 4000000)
 
         self.population = pop
         self.critics = critics

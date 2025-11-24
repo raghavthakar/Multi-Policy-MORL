@@ -447,3 +447,50 @@ class Checkpoint:
             if not file_exists:
                 writer.writerow(["generation", "cumulative_frames", "vector_return"])
             writer.writerow([int(generation_number), cumulative_frames, vec_str])
+    
+    
+    def log_pareto_stats(
+        self,
+        generation_number: int,
+        vector_returns: List[np.ndarray] | np.ndarray
+    ) -> None:
+        """
+        Append Pareto-front statistics to pareto_stats.csv.
+        
+        Columns:
+        - generation (int)
+        - vector_returns (string): a list where each element is a vector return,
+            formatted without commas, e.g.:
+            "[[12.3  -4.1]
+                [10.2 -10.7]
+                [ 3.2  -25.1]]"
+        """
+
+        # Convert list of returns into a clean 2D numpy array
+        # (each element is a 1D return vector)
+        vec_array = []
+        for vr in vector_returns:
+            if isinstance(vr, torch.Tensor):
+                vr = vr.detach().cpu().numpy()
+            vr = np.asarray(vr, dtype=float).ravel()
+            vec_array.append(vr)
+        vec_array = np.stack(vec_array, axis=0)
+
+        # Convert to string with space-separated floats, no commas
+        vec_str = np.array2string(
+            vec_array,
+            separator=' ',
+            max_line_width=10**9
+        )
+
+        # Build file path
+        stats_path = self.path / "pareto_stats.csv"
+        file_exists = stats_path.exists()
+        mode = "a" if file_exists else "w"
+
+        # Write CSV
+        with stats_path.open(mode, newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["generation", "vector_returns"])
+            writer.writerow([int(generation_number), vec_str])

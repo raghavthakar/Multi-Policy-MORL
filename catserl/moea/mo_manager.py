@@ -400,6 +400,9 @@ class MOManager:
         self.generation += 1
         self.visualizer.update(population=self.population, generation=self.generation)
 
+        # log the population
+        self.ckpt.log_pareto_stats(self.generation, [ind.vector_return for ind in self.population])
+
         # 1. Parent Selection: Find the largest gap in the current Pareto front.
         parent_a, parent_b = self._find_gap_and_select_parents(self.population)
         if not (parent_a and parent_b):

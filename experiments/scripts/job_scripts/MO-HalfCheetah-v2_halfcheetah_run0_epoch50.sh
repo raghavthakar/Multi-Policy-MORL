@@ -13,4 +13,4 @@ conda activate /nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env
 
 cd /nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL
 
-python -m catserl.orchestrator.orchestrator --stage1-alg=td3  --save-data-dir=/nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL/sampledata/ --config=/nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL/catserl/shared/config/halfcheetah.yaml
+python -m catserl.orchestrator.orchestrator --save-data-dir=/nfs/stak/users/thakarr/hpc-share/mopderl-env/weightconditioned_log_data_stage1_only/MO-HalfCheetah-v2/run_0_epoch50 --config=/nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL/catserl/shared/config/halfcheetah_epoch50.yaml --resume-stage2

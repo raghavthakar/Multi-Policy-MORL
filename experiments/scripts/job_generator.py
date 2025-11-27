@@ -18,7 +18,7 @@ def generate_bash_scripts(env, data_dir, config):
         file.write("source activate base\n\n")
         file.write("conda activate /nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env\n\n")
         file.write("cd /nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL\n\n")
-        file.write(f'python -m catserl.orchestrator.orchestrator --stage1-alg=td3  --save-data-dir={data_dir} --config=/nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL/catserl/shared/config/halfcheetah.yaml')
+        file.write(f'python -m catserl.orchestrator.orchestrator --save-data-dir=/nfs/stak/users/thakarr/hpc-share/mopderl-env/weightconditioned_log_data_stage1_only/MO-HalfCheetah-v2/run_1 --config=/nfs/stak/users/thakarr/hpc-share/multi-policy-morl-env/Multi-Policy-MORL/catserl/shared/config/halfcheetah.yaml --resume-stage2')
 
     # Make the file executable
     os.chmod(script_path, 0o755)

@@ -20,7 +20,7 @@ class Finetuner(ABC):
         self,
         child: Actor,
         target_scalarisation: np.ndarray,
-        critics: Dict[int, torch.nn.Module]
+        critics: Dict[int, List[torch.nn.Module]]
     ) -> None:
         """
         This method contains the logic for finetuning the child actor.
@@ -60,7 +60,7 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
         self,
         child: Actor,
         target_scalarisation: np.ndarray,
-        critics: Dict[int, torch.nn.Module]
+        critics: Dict[int, List[torch.nn.Module]]
     ) -> None:
         """
         Performs the core offline finetuning logic on a static dataset.
@@ -87,67 +87,84 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
 
     @staticmethod
     @torch.no_grad()
-    def _min_q(critic: torch.nn.Module, s_conditioned: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
-        """Helper to return the minimum over twin Q-heads from a TD3 critic."""
-        q1, q2 = critic(s_conditioned, a)
+    def _min_q(critic: torch.nn.Module, s: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
+        """
+        Helper to return the minimum over twin Q-heads from a TD3 critic.
+        Updated: No longer takes s_conditioned, just s and a.
+        """
+        q1, q2 = critic(s, a)
         return torch.min(q1, q2).squeeze(-1)
 
     @torch.no_grad()
     def _compute_hybrid_advantages(
         self,
         child: Actor,
-        critics: Dict[int, torch.nn.Module],
+        critics: Dict[int, List[torch.nn.Module]], # Updated type hint
         target_scalarisation: np.ndarray,
         device: torch.device
     ) -> torch.Tensor:
         """
-        Computes advantage estimates for the entire static dataset.
+        Computes advantage estimates using the Split Critic architecture.
         
-        It iterates through each specialist critic and its corresponding in-distribution
-        data. For each data subset, it uses the specialist critic to compute the
-        advantage for ALL objectives by conditioning its input on the appropriate
-        one-hot scalarization vector.
+        We select the specific specialist critic for the data's origin 
+        and the objective we want to evaluate.
         """
+        # Sample all data from the child's buffer
         all_s, all_a, _, _, _ = child.buffer.sample(len(child.buffer), device=device)
         all_origins = torch.from_numpy(child.buffer_origins).long().to(device)
         
         n_samples = all_s.shape[0]
-        num_objectives = len(critics)
-        one_hot_vectors = torch.eye(num_objectives, device=device)
+        
+        # Determine number of objectives based on the first entry in the critics dict
+        first_island_critics = next(iter(critics.values()))
+        num_objectives = len(first_island_critics)
         
         advs = torch.zeros(num_objectives, n_samples, device=device)
         mu_all = child.policy(all_s)
 
-        for cid, critic in critics.items():
-            critic.eval()
-            origin_mask = (all_origins == cid)
+        # Iterate over each island (the source of the data)
+        for island_id, island_critic_list in critics.items():
+            
+            # 1. Identify which samples came from this specific island
+            origin_mask = (all_origins == island_id)
             if not origin_mask.any():
                 continue
 
-            s_subset, a_subset, mu_subset = all_s[origin_mask], all_a[origin_mask], mu_all[origin_mask]
-            n_subset = s_subset.shape[0]
+            # 2. Extract the relevant subset of data
+            s_subset = all_s[origin_mask]
+            a_subset = all_a[origin_mask]
+            mu_subset = mu_all[origin_mask]
 
+            # 3. Iterate over each objective to calculate specific advantages
             for obj_idx in range(num_objectives):
-                w_vec = one_hot_vectors[obj_idx]
-                w_batch = w_vec.expand(n_subset, -1)
-                s_conditioned = torch.cat([s_subset, w_batch], 1)
                 
-                if hasattr(critic, 'Q1'):
+                # RETRIEVAL: Get the specific critic for this (Island, Objective) pair
+                # island_critic_list[obj_idx] is the expert on:
+                #    - Data from island_id
+                #    - Value of obj_idx
+                specific_critic = island_critic_list[obj_idx]
+                specific_critic.eval()
+                
+                # EVALUATION: Compute Q(s,a) and V(s) = Q(s, mu(s))
+                if hasattr(specific_critic, 'Q1'):
                     # Bespoke TD3 Critic path
-                    q_sa = self._min_q(critic, s_conditioned, a_subset)
-                    v_s  = self._min_q(critic, s_conditioned, mu_subset)
+                    q_sa = self._min_q(specific_critic, s_subset, a_subset)
+                    v_s  = self._min_q(specific_critic, s_subset, mu_subset)
                 else:
                     # MOPDERL DDPG Critic path
-                    # We must squeeze the [N, 1] output to [N]
-                    q_sa = critic(s_conditioned, a_subset).squeeze(-1)
-                    v_s = critic(s_conditioned, mu_subset).squeeze(-1)
+                    q_sa = specific_critic(s_subset, a_subset).squeeze(-1)
+                    v_s = specific_critic(s_subset, mu_subset).squeeze(-1)
                 
+                # Store the advantage for this objective on these samples
                 advs[obj_idx, origin_mask] = q_sa - v_s
 
+        # 4. Scalarise the advantages using the Child's Target Weights
         w_target = torch.from_numpy(target_scalarisation).float().to(device).unsqueeze(1)
+        
+        # Sum_{obj} (weight_obj * advantage_obj)
         hybrid_adv = torch.sum(advs * w_target, dim=0)  # [n_samples]
 
-        # normalise *scalarised* advantages, not per-objective
+        # Normalise
         if self.adv_norm == "zscore":
             mu  = hybrid_adv.mean()
             std = hybrid_adv.std().clamp_min(1e-6)

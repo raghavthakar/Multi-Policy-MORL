@@ -67,7 +67,7 @@ def _load_mopderl_data(
 
     # Initialize the data structures we need to return
     population: List[actors.Actor] = []
-    critics: Dict[int, torch.nn.Module] = {}
+    critics: Dict[int, List[torch.nn.Module]] = {}
     buffers: Dict[int, ReplayBuffer] = {}
     weights: Dict[int, List[int]] = {}
 
@@ -133,7 +133,14 @@ def _load_mopderl_data(
         mopderl_critic_net = ddpg.Critic(args).to(device)
         mopderl_critic_net.load_state_dict(sd['critic'])
         mopderl_critic_net.eval()
-        critics[island_id] = mopderl_critic_net
+        # Load the secondary critics
+        mopderl_sec_critic_nets = [ddpg.Critic(args).to(device) for _ in range(len(sd['sec_critics']))]
+        for sec_critic, sec_critic_sd in zip(mopderl_sec_critic_nets, sd['sec_critics']):
+            sec_critic.load_state_dict(sec_critic_sd)
+            sec_critic.eval()
+        # critics[island_id][obj_num] should be the critic for that objective
+        critics[island_id] = mopderl_sec_critic_nets
+        critics[island_id].insert(island_id, mopderl_critic_net)
 
         # --- 5. Translate Buffer ---
         # Load MOPDERL buffer
@@ -165,7 +172,7 @@ def _load_mopderl_data(
             catserl_buf.push(s, a, r, s2, d)
 
         buffers[island_id] = catserl_buf
-        weights[island_id] = np.array([0 if i == island_id else 1 for i in range(args.num_rl_agents)]) #HACK
+        weights[island_id] = np.array([1 if i == island_id else 0 for i in range(args.num_rl_agents)])
 
     print(f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} critics, {len(buffers)} buffers (MOPDERL).")
     return population, critics, buffers, weights, 10
@@ -278,8 +285,13 @@ def _load_merged_mopderl(root_dir: Path, merged_stem: str, merged_suffix: str, d
         buffers_by_island[int(island_id_str)] = rb
 
     # 6. Load Critics and Metadata
-    critics = {int(k): v.to(device) for k, v in payload["critics"].items()}
+    critics = {int(k): [c.to(device) for c in v] for k, v in payload["critics"].items()}
     weights = {int(k): np.array(v) for k, v in payload["weights"].items()}
+
+    # HACK
+    # critics[0], critics[1] = critics[1], critics[0]
+    # buffers_by_island[0], buffers_by_island[1] = buffers_by_island[1], buffers_by_island[0]
+
     meta = payload.get("meta", {})
 
     return population, critics, buffers_by_island, weights, meta

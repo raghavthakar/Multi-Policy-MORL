@@ -188,7 +188,14 @@ class MOManager:
         """
         # Start the child as a clone of one parent (keeps architecture/optim state intact).
         # We'll *not* average weights; instead we'll align behavior in action space below.
-        child = parent_a.clone()
+        # child = parent_a.clone()
+        child = Actor(
+            'td3',
+            pop_id=0,
+            obs_shape=parent_a.obs_shape,
+            action_type=parent_a.action_type,
+            action_dim=parent_a.action_dim,
+        )
         child.pop_id = uuid.uuid4().hex[:8]
 
         # Determine the number of samples to draw from each specialist buffer

@@ -60,7 +60,7 @@ class MOManager:
         pop, critics, buffers, weights, _ = self.ckpt.load_checkpoint(device=self.device)
 
         # check if loaded from mopderl
-        if self.ckpt.loaded_mopderl_slow == True and self.ckpt.loaded_catserl_fast == False:
+        if self.ckpt.loaded_cache == False:
             # save a fast cache from mopderl save data
             self.ckpt.save_merged(pop, critics, buffers, weights, self.cfg, 2024, 4000000)
 

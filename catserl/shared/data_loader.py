@@ -27,156 +27,219 @@ def _parse_mopderl_info_txt(info_file: Path) -> SimpleNamespace:
     Parses MOPDERL's info.txt file into a mock 'args' object.
     """
     if not info_file.exists():
-        raise FileNotFoundError(f"MOPDERL info.txt not found at: {info_file}")
+        # Fallback: Create a minimal mock args if file missing
+        print(f"[Loader] info.txt not found at {info_file}, using defaults.")
+        return SimpleNamespace(
+            state_dim=10, # REPLACE WITH DEFAULTS IF NEEDED
+            action_dim=2,
+            ls=200, # Hidden size
+            buffer_size=1000000,
+            num_rl_agents=2,
+            num_objectives=2,
+            device='cpu' 
+        )
 
     raw_text = info_file.read_text()
-
     # Clean the text: ast.literal_eval cannot parse "device(type='cuda')"
-    # We'll replace it with a placeholder (None) since we override
-    # the device later anyway.
-    cleaned_text = re.sub(r"device\([^)]+\)", "None", raw_text)
+    cleaned_text = re.sub(r"device\([^)]+\)", "'cpu'", raw_text)
 
     try:
-        # Use ast.literal_eval for safe parsing of Python-like structures
         params_dict = ast.literal_eval(cleaned_text)
     except Exception as e:
         print(f"Error parsing MOPDERL info.txt: {e}")
         raise
 
-    # Convert dict to SimpleNamespace for dot-notation access
-    # (e.g., args.state_dim), which MOPDERL's classes expect.
-    args = SimpleNamespace(**params_dict)
-    return args
+    return SimpleNamespace(**params_dict)
 
+def _load_single_actor(
+    state_dict_path: Path, 
+    args: SimpleNamespace, 
+    device: torch.device, 
+    pop_id: int,
+    is_genetic_agent: bool
+) -> actors.Actor:
+    """
+    Helper to load a single actor (either RL-Teacher or Genetic-Student)
+    and wrap it in a catserl.Actor.
+    """
+    # 1. Init wrapper
+    wrapper_actor = actors.Actor(
+        kind="td3", # Compatible generic type
+        pop_id=pop_id,
+        obs_shape=(args.state_dim,),
+        action_type="continuous",
+        action_dim=args.action_dim,
+        hidden_dim=args.ls,
+        max_action=1.0,
+        device=device,
+    )
+
+    # 2. Init MOPDERL network
+    mopderl_net = ddpg.Actor(args).to(device)
+    
+    # 3. Load Weights
+    # Genetic agents and RL agents use different keys in their dictionaries
+    sd = torch.load(state_dict_path, map_location=device)
+    
+    if is_genetic_agent:
+        # GeneticAgent.save_info uses 'actor_sd'
+        key = 'actor_sd' 
+    else:
+        # DDPG.save_info uses 'actor'
+        key = 'actor'
+
+    if key in sd:
+        mopderl_net.load_state_dict(sd[key])
+    else:
+        # Fallback: try loading directly if the file *is* the state dict
+        try:
+            mopderl_net.load_state_dict(sd)
+        except:
+            print(f"Warning: Could not load actor keys from {state_dict_path}. Available keys: {sd.keys()}")
+            return None
+
+    mopderl_net.eval()
+
+    # 4. Inject
+    wrapper_actor._impl.net = mopderl_net
+    wrapper_actor._impl.max_action = 1.0
+    
+    return wrapper_actor
 
 def _load_mopderl_data(
     root_dir: Path, device: torch.device
-) -> Tuple[List[actors.Actor], Dict[int, torch.nn.Module], Dict[int, ReplayBuffer]]:
-    """
-    Loads and translates data from the MOPDERL checkpoint format.
-    """
-    print(f"[Stage1Loader] Loading MOPDERL data from: {root_dir}")
+) -> Tuple[List[actors.Actor], Dict[int, Any], Dict[int, ReplayBuffer], Dict[int, np.ndarray], int]:
+    
+    print(f"[Stage1Loader] Scanning MOPDERL data at: {root_dir}")
 
-    # 1. Load MOPDERL config ('args') from info.txt
+    # 1. Load Args
     info_file = root_dir / "info.txt"
     args = _parse_mopderl_info_txt(info_file)
+    args.device = device 
 
-    # CRITICAL: Override the device from the file with the one requested
-    # by the user. MOPDERL's networks use args.device upon creation.
-    args.device = device
-
-    # Initialize the data structures we need to return
     population: List[actors.Actor] = []
     critics: Dict[int, List[torch.nn.Module]] = {}
     buffers: Dict[int, ReplayBuffer] = {}
-    weights: Dict[int, List[int]] = {}
+    weights: Dict[int, np.ndarray] = {}
 
+    # Define paths based on 'tree' output
     ckpt_dir = root_dir / "checkpoint"
     warm_up_dir = ckpt_dir / "warm_up"
-    agents_dir = warm_up_dir / "rl_agents"
 
-    # 2. Loop over each "island" (MOPDERL calls them rl_agents)
-    for island_id in range(args.num_rl_agents):
-        agent_dir = agents_dir / str(island_id)
-        state_dict_file = agent_dir / "state_dicts.pkl"
-        buffer_file = agent_dir / "buffer.npy"
+    if not warm_up_dir.exists():
+        raise FileNotFoundError(f"Expected warm_up directory not found at: {warm_up_dir}")
 
-        if not state_dict_file.exists():
-            print(
-                f"Warning: MOPDERL state_dicts.pkl not found for "
-                f"island {island_id}. Skipping."
-            )
+    # ====================================================
+    # PART A: Load RL Agents (Teachers)
+    # These provide: Actors, Critics, and Replay Buffers
+    # ====================================================
+    rl_agents_dir = warm_up_dir / "rl_agents"
+    if rl_agents_dir.exists():
+        print(f"Loading RL Agents from {rl_agents_dir}...")
+        
+        # Identify how many islands based on folders present (0, 1, 2...)
+        island_ids = [int(p.name) for p in rl_agents_dir.iterdir() if p.is_dir() and p.name.isdigit()]
+        
+        for island_id in sorted(island_ids):
+            agent_path = rl_agents_dir / str(island_id)
+            sd_file = agent_path / "state_dicts.pkl"
+            buf_file = agent_path / "buffer.npy"
+
+            # 1. Load Actor
+            if sd_file.exists():
+                actor = _load_single_actor(sd_file, args, device, pop_id=island_id, is_genetic_agent=False)
+                if actor:
+                    population.append(actor)
+
+                # 2. Load Critics (Only RL Agents have these)
+                sd = torch.load(sd_file, map_location=device)
+                
+                # Primary Critic
+                mopderl_critic = ddpg.Critic(args).to(device)
+                mopderl_critic.load_state_dict(sd['critic'])
+                mopderl_critic.eval()
+
+                # Secondary Critics
+                sec_sd_list = sd.get('sec_critics', [])
+                mopderl_sec_critics = [ddpg.Critic(args).to(device) for _ in range(len(sec_sd_list))]
+                for net, net_sd in zip(mopderl_sec_critics, sec_sd_list):
+                    net.load_state_dict(net_sd)
+                    net.eval()
+                
+                # Organize: [Critic_Obj0, Critic_Obj1, ...]
+                # We insert the primary critic at the index corresponding to the island_id
+                all_critics = mopderl_sec_critics
+                all_critics.insert(island_id, mopderl_critic)
+                critics[island_id] = all_critics
+
+            # 3. Load Buffer (Only RL Agents have large buffers worth loading)
+            if buf_file.exists():
+                # Mock loading to CPU first
+                original_dev = args.device
+                args.device = 'cpu'
+                mopderl_buf = replay_memory.ReplayMemory(args.buffer_size, 'cpu')
+                mopderl_buf.load_info(buf_file)
+                args.device = original_dev
+
+                # Convert to local ReplayBuffer
+                catserl_buf = ReplayBuffer(
+                    obs_shape=(args.state_dim,),
+                    action_type="continuous",
+                    action_dim=args.action_dim,
+                    capacity=len(mopderl_buf.memory),
+                    device=device
+                )
+                
+                for trans in mopderl_buf.memory:
+                    catserl_buf.push(
+                        trans.state.squeeze(0),
+                        trans.action.squeeze(0),
+                        trans.reward.squeeze(0),
+                        trans.next_state.squeeze(0),
+                        bool(trans.done.item())
+                    )
+                buffers[island_id] = catserl_buf
+
+            # 4. Infer Weights (One-Hot assumption for islands)
+            w = np.zeros(getattr(args, 'num_objectives', 2))
+            if island_id < len(w):
+                w[island_id] = 1.0
+            weights[island_id] = w
+
+    # ====================================================
+    # PART B: Load Genetic Populations (Students)
+    # These provide: Actors only (pop0, pop1, ...)
+    # ====================================================
+    print(f"Scanning for genetic populations in {warm_up_dir}...")
+    
+    # Find folders named 'pop0', 'pop1', etc.
+    pop_dirs = list(warm_up_dir.glob("pop*"))
+    
+    for p_dir in pop_dirs:
+        # Extract ID from 'pop0' -> 0
+        try:
+            pop_id = int(p_dir.name.replace("pop", ""))
+        except ValueError:
+            print(f"Skipping folder {p_dir.name}, could not parse ID.")
             continue
-        if not buffer_file.exists():
-            print(
-                f"Warning: MOPDERL buffer.npy not found for "
-                f"island {island_id}. Skipping."
-            )
-            continue
-
-        # Load the saved weights
-        sd = torch.load(state_dict_file, map_location="cpu")
-
-        # --- 3. Translate Actor ---
-        # Instantiate a catserl.Actor wrapper
-        # We must use 'kind="td3"' so it's compatible with MOManager
-        wrapper_actor = actors.Actor(
-            kind="td3",
-            pop_id=island_id,
-            obs_shape=(args.state_dim,),  # MOPDERL uses flat states
-            action_type="continuous",
-            action_dim=args.action_dim,
-            hidden_dim=args.ls,  # From info.txt
-            max_action=1.0,  # MOPDERL actor uses tanh, so max_action is 1.0
-            device=device,
-            # buffer_size is for the actor's MiniBuffer, can be default
-        )
-
-        # Instantiate the *MOPDERL* network
-        mopderl_actor_net = ddpg.Actor(args).to(device)
-        mopderl_actor_net.load_state_dict(sd['actor'])
-        mopderl_actor_net.eval()
-
-        # --- THE HACK ---
-        # Overwrite the default policy in the catserl.Actor wrapper
-        # with the loaded MOPDERL policy network.
-        # This works because all methods (act, flat_params)
-        # are routed to `_impl.net`.
-        wrapper_actor._impl.net = mopderl_actor_net
-        # Also update max_action, as MOPDERL's is 1.0
-        wrapper_actor._impl.max_action = 1.0
-
-        population.append(wrapper_actor)
-
-        # --- 4. Translate Critic ---
-        # This is simple: just load the MOPDERL critic module.
-        mopderl_critic_net = ddpg.Critic(args).to(device)
-        mopderl_critic_net.load_state_dict(sd['critic'])
-        mopderl_critic_net.eval()
-        # Load the secondary critics
-        mopderl_sec_critic_nets = [ddpg.Critic(args).to(device) for _ in range(len(sd['sec_critics']))]
-        for sec_critic, sec_critic_sd in zip(mopderl_sec_critic_nets, sd['sec_critics']):
-            sec_critic.load_state_dict(sec_critic_sd)
-            sec_critic.eval()
-        # critics[island_id][obj_num] should be the critic for that objective
-        critics[island_id] = mopderl_sec_critic_nets
-        critics[island_id].insert(island_id, mopderl_critic_net)
-
-        # --- 5. Translate Buffer ---
-        # Load MOPDERL buffer
-        mopderl_buf = replay_memory.ReplayMemory(
-            capacity=args.buffer_size,
-            device="cpu"  # Load to CPU first
-        )
-        mopderl_buf.load_info(buffer_file)
-
-        # Create a new catserl.ReplayBuffer
-        catserl_buf = ReplayBuffer(
-            obs_shape=(args.state_dim,),
-            action_type="continuous",
-            action_dim=args.action_dim,
-            capacity=mopderl_buf.capacity,
-            device=device  # Target device
-        )
-
-        # Copy transitions one by one, translating format
-        for trans in mopderl_buf.memory:
-            # MOPDERL stores (1, dim) arrays, squeeze them
-            s = trans.state.squeeze(0)
-            a = trans.action.squeeze(0)
-            r = trans.reward.squeeze(0)
-            s2 = trans.next_state.squeeze(0)
-            d = bool(trans.done.item())
             
-            # Push into our buffer
-            catserl_buf.push(s, a, r, s2, d)
+        print(f"  Loading population {pop_id}...")
+        
+        # Iterate over individuals inside (0, 1, 2, ... 9)
+        individual_dirs = [p for p in p_dir.iterdir() if p.is_dir() and p.name.isdigit()]
+        
+        for ind_dir in individual_dirs:
+            sd_file = ind_dir / "state_dicts.pkl"
+            if sd_file.exists():
+                # Note: is_genetic_agent=True handles the 'actor_sd' key difference
+                actor = _load_single_actor(sd_file, args, device, pop_id=pop_id, is_genetic_agent=True)
+                if actor:
+                    population.append(actor)
 
-        buffers[island_id] = catserl_buf
-        weights[island_id] = np.array([1 if i == island_id else 0 for i in range(args.num_rl_agents)])
-
-    print(f"[Stage1Loader] Loaded {len(population)} actors, {len(critics)} critics, {len(buffers)} buffers (MOPDERL).")
+    print(f"[Stage1Loader] Final counts: {len(population)} actors, {len(critics)} critic-sets, {len(buffers)} buffers.")
+    
+    # Return a default batch size (e.g. 10) as the last element
     return population, critics, buffers, weights, 10
-
 
 @torch.no_grad()
 def _load_merged_mopderl(root_dir: Path, merged_stem: str, merged_suffix: str, device: torch.device | str = "cpu", timestep: Optional[int] = None):

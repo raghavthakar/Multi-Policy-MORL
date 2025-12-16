@@ -43,11 +43,12 @@ mopderl:
 
   # Hyperparameters for the AWR fine-tuning process
   finetune:
-    epochs:          10
+    epochs:          50
     lr:              3e-4
     batch_size:      256
-    awr_beta:        10.0      # Temperature for continuous AWR
+    awr_beta:        1.0      # Temperature for continuous AWR
     awr_clip:        20.0     # Max value for AWR weights
+    pretrain_steps:  20000    # how many behaviour cloning steps
 
 # -------------------------------------------------
 #  Buffers for Genetic Actors

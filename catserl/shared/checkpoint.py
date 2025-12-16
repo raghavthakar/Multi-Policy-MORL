@@ -247,7 +247,7 @@ class Checkpoint:
                 },
             })
 
-        critics_blob = {str(k): v.cpu() for k, v in critics_by_island.items()}
+        critics_blob = {str(k): [c.cpu() for c in v] for k, v in critics_by_island.items()}
         weights_blob = {str(k): v.tolist() for k, v in weights_by_island.items()}
 
         buffers_blob = {}

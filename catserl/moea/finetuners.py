@@ -189,7 +189,7 @@ class ContinuousWeightedMSEFinetuner(Finetuner):
             for s_batch, a_batch, adv_batch in dataloader:
                 # Compute advantage-weighted weights using a numerically stable softmax.
                 x = adv_batch / self.beta
-                x = x - x.max().detach()
+                # x = x - x.max().detach()
                 awr_weights = torch.exp(x).clamp(max=self.awr_clip)
 
                 # The loss is the mean-squared error between the policy's action

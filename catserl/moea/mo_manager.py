@@ -101,48 +101,7 @@ class MOManager:
         self.generation = 0
         self.visualizer = BasicVisualizer(num_objectives=self.num_objectives)
 
-        # Optionally, repopulate a specialist buffer with fresh data from the
-        # final expert policy to ensure high data quality for finetuning.
-        if self.cfg.get("repopulate_buffer", False):
-            num_steps_to_collect = self.cfg.get("repopulate_steps", 1_000_000)
-            print("\n--- Starting Expert Buffer Repopulation ---")
-            
-            expert_actor = self.population[0]
-            buffer_to_repopulate = self.specialist_buffers[1]
-            print(f"Target: Repopulating buffer [ID: 1] with {num_steps_to_collect} transitions from actor '{expert_actor.pop_id}'.")
-
-            # Clear the old buffer by resetting its internal pointers.
-            buffer_to_repopulate.ptr = 0
-            buffer_to_repopulate.size = 0
-            
-            rollout_env = mo_gym.make(self.glob_cfg['env']['name'])
-            global_seed = self.glob_cfg.get("seed", 2024)
-            obs, _ = rollout_env.reset(seed=global_seed)
-            
-            total_steps = 0
-            while total_steps < num_steps_to_collect:
-                done = False
-                episode_steps = 0
-                while not done:
-                    with torch.no_grad():
-                        # Use the deterministic action from the expert policy.
-                        action = expert_actor.act(np.array(obs), use_noise=False)
-                    
-                    next_obs, reward, terminated, truncated, _ = rollout_env.step(action)
-                    done = terminated or truncated
-                    
-                    buffer_to_repopulate.push(obs, action, np.array(reward, dtype=np.float32), next_obs, float(done))
-                    obs = next_obs
-                    total_steps += 1
-                    episode_steps += 1
-
-                    if total_steps >= num_steps_to_collect:
-                        break
-                
-                print(f"  [Rollout] Episode finished ({episode_steps} steps). Total collected: {total_steps}/{num_steps_to_collect}")
-                obs, _ = rollout_env.reset() # Subsequent resets are unseeded but deterministic.
-
-            print(f"--- Finished Repopulation. Buffer [ID: 1] now contains {len(buffer_to_repopulate)} expert transitions. ---\n")
+        self.verify_critic_expertise()
 
     def _get_pareto_front(self, population: List[Actor]) -> List[Actor]:
         """
@@ -374,6 +333,63 @@ class MOManager:
                     p.add_(noise_std * std * torch.randn_like(p))
 
         child.policy.eval()
+    
+    def verify_critic_expertise(self, batch_size=128):
+        """
+        Sanity check: Verifies that critics[i][j] minimizes Bellman error 
+        specifically for reward index j using data from buffer i.
+        """
+        print("\n--- Verifying Critic Identity (Physics Check) ---")
+        
+        # Iterate over every island
+        for island_id, specialist_critics in self.critics.items():
+            buffer = self.specialist_buffers[island_id]
+            
+            # Sample a diagnostic batch
+            s, a, r, s2, d = buffer.sample(batch_size)
+            # r is expected to be shape [batch_size, num_objectives]
+            
+            print(f"Island {island_id}: Checking {len(specialist_critics)} critics...")
+
+            for claimed_obj_idx, critic in enumerate(specialist_critics):
+                
+                # 1. Compute target Q-value (Bootstrapping)
+                # We use the critic itself for the target to keep it simple 
+                # (we just want to check consistency, not train)
+                with torch.no_grad():
+                    # Get next action from the actor (or just current actor)
+                    # Ideally use the actor from the same island, but current population actor is fine approximation
+                    next_action = self.population[island_id].policy(s2) 
+                    
+                    if hasattr(critic, 'Q1'):
+                        q_next1, q_next2 = critic(s2, next_action)
+                        q_next = torch.min(q_next1, q_next2)
+                        q_pred1, q_pred2 = critic(s, a)
+                        q_pred = q_pred1 # Test Q1 head
+                    else:
+                        q_next = critic(s2, next_action).squeeze(-1)
+                        q_pred = critic(s, a).squeeze(-1)
+
+                # 2. Check Bellman Error against ALL objective rewards
+                errors = []
+                for test_obj_idx in range(self.num_objectives):
+                    # Bellman Target using reward from test_obj_idx
+                    target = r[:, test_obj_idx] + (0.99 * (1 - d)) * q_next
+                    
+                    # Mean Squared Bellman Error
+                    msbe = ((q_pred - target) ** 2).mean().item()
+                    errors.append(msbe)
+
+                # 3. Validation
+                best_fit_obj = np.argmin(errors)
+                is_match = (best_fit_obj == claimed_obj_idx)
+                
+                status = "PASS" if is_match else "FAIL"
+                print(f"  - Critic[{claimed_obj_idx}]: Best fits Obj {best_fit_obj} "
+                      f"(Error: {errors[best_fit_obj]:.4f} vs Others: {np.mean(errors):.4f}) -> {status}")
+
+                if not is_match:
+                    print(f"    [WARNING] Critic at index {claimed_obj_idx} seems to predict Objective {best_fit_obj} better!")
 
     def evolve(self):
         """

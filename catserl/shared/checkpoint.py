@@ -406,12 +406,8 @@ class Checkpoint:
             self.loaded_cache = True
             return data_loader._load_merged_mopderl(root_dir=self.path, merged_stem=self._merged_stem, merged_suffix=self._merged_suffix, device=device)
         except:
-            try:
-                return data_loader._load_merged_mopderl(root_dir=self.path, merged_stem=self._merged_stem, merged_suffix=self._merged_suffix, device=device)
-            except:
-                self.loaded_mopderl_slow = True
-                self.loaded_catserl_fast = False
-                return data_loader._load_mopderl_data(root_dir=self.path, device=device)
+            self.loaded_cache = False
+            return data_loader._load_mopderl_data(root_dir=self.path, device=device)
 
     def log_stats(
         self,

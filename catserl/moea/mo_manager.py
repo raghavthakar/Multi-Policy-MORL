@@ -457,6 +457,9 @@ class MOManager:
             target_scalarisation=target_scalarisation,
             critics=self.critics
         )
+
+        # Clear the contents of the child's buffer to save memory
+        child.buffer.clear()
         
         # Add the new, fine-tuned child to the population for the next generation.
         self.population.append(child)

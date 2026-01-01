@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Tuple, Optional, List, Dict
 import uuid
 import random
+import copy
 
 import torch
 import numpy as np
@@ -15,6 +16,7 @@ from catserl.shared.actors import Actor
 from catserl.shared.buffers import MiniBuffer
 from catserl.moea.basic_visualizer import BasicVisualizer
 from catserl.moea.finetuners import Finetuner
+from catserl.moea.post_hoc_trainer import PostHocTrainer
 
 
 __all__ = ["MOManager"]
@@ -36,6 +38,7 @@ class MOManager:
         cfg: Dict,
         ckpt_path: str | Path,
         device: torch.device | str = "cpu",
+        train_post_hoc: bool = False
     ) -> None:
         """
         Initializes the manager by loading a merged checkpoint containing
@@ -57,6 +60,11 @@ class MOManager:
         print(f"[MOManager] Loading merged checkpoint from: {ckpt_path}")
         self.ckpt = Checkpoint(ckpt_path)
         pop, critics, buffers, weights, _ = self.ckpt.load_checkpoint(device=self.device)
+
+        # train the secondary critics post-hoc if needed
+        if train_post_hoc:
+            self.post_hoc_trainer = PostHocTrainer(cfg)
+            critics = self.post_hoc_trainer.train_post_hoc_critics(critics, buffers, copy.deepcopy(pop))
 
         # check if loaded from mopderl
         if self.ckpt.loaded_cache == False:

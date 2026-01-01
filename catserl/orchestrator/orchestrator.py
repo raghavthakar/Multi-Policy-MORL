@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume-stage1", action='store_true', default=False, help="If set, resume Stage 1 island training from a checkpoint (from --save-data-dir).")
     parser.add_argument("--resume-stage2", action='store_true', default=False, help="If set, skip island training and load a merged checkpoint (from --save-data-dir) to start Stage 2.")
     parser.add_argument("--make-sparse-env", action='store_true', default=False, help="If set, rewards will be summed per episode and provided only when episode ends.")
+    parser.add_argument("--train-post-hoc", action='store_true', default=False, help="Train secondary critics post hoc from buffer?")
 
     args = parser.parse_args(argv)
 
@@ -129,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         # If resuming Stage 2 directly from a checkpoint, skip island training entirely.
         if args.resume_stage2:
-            mo_mgr = MOManager(env1, cfg, args.save_data_dir, device=device)
+            mo_mgr = MOManager(env1, cfg, args.save_data_dir, device=device, train_post_hoc=args.train_post_hoc)
             for _ in range(2500):
                 mo_mgr.evolve()
             print("MOManager Stage 2 run complete (resumed from checkpoint).")

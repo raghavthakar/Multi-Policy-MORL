@@ -5,7 +5,6 @@ from typing import Tuple, Optional, List, Dict
 import uuid
 import random
 
-from scipy.spatial.distance import pdist, squareform
 import torch
 import numpy as np
 import mo_gymnasium as mo_gym

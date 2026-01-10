@@ -79,8 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.resume_stage2:
         # Must first train objective experts on islands.
         # Two islands with different objective weights.
-        mgr0 = IslandManager(env1, args.stage1_alg, 1, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, use_re3=True,  seed=seed + 1, device=device)
-        mgr1 = IslandManager(env2, args.stage1_alg, 2, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, use_re3=False, seed=seed + 2, device=device)
+        mgr0 = IslandManager(env1, args.stage1_alg, 0, np.array([1, 0]), list([np.array([0, 1])]), cfg, checkpointer=ckpt, use_re3=False,  seed=seed + 1, device=device)
+        mgr1 = IslandManager(env2, args.stage1_alg, 1, np.array([0, 1]), list([np.array([1, 0])]), cfg, checkpointer=ckpt, use_re3=False, seed=seed + 2, device=device)
 
         # If the resume flag is set, load the state for each manager.
         if args.resume_stage1:
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         
         # Initialize timestep tracker *after* potential resume.
         t = [mgr0.trained_timesteps, mgr1.trained_timesteps]
-        save_merged_pops_every = 60000
+        save_merged_pops_every = 10000
         num_checkpts = sum(t) // save_merged_pops_every
         total_timesteps = cfg['rl']['total_timesteps']
         
@@ -115,9 +115,9 @@ def main(argv: list[str] | None = None) -> int:
                 if ckpt:
                     try:
                         # Merge islands for potential Stage 2.
-                        pop0, id0, critic0, buffer0, w0 = mgr0.export_island()
-                        pop1, id1, critic1, buffer1, w1 = mgr1.export_island()
-                        ckpt.save_merged(pop0 + pop1, {id0: critic0, id1: critic1}, 
+                        pop0, id0, critics0, buffer0, w0 = mgr0.export_island()
+                        pop1, id1, critics1, buffer1, w1 = mgr1.export_island()
+                        ckpt.save_merged(pop0 + pop1, {id0: critics0, id1: critics1}, 
                                          {id0: buffer0, id1:buffer1}, {id0: w0, id1: w1}, cfg, seed, timestep=t)
                         print(f"Saved merged checkpoint to: {args.save_data_dir}")
                     except Exception as e:

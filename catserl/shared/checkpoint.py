@@ -395,13 +395,15 @@ class Checkpoint:
             buffers_by_island[int(island_id_str)] = rb
 
         # --- Critics / weights / meta ---
-        critics = {int(k): v.to(device) for k, v in payload["critics"].items()}
+        critics = {int(k): [c.to(device) for c in v] for k, v in payload["critics"].items()}
         weights = {int(k): np.array(v) for k, v in payload["weights"].items()}
         meta = payload.get("meta", {})
 
         return population, critics, buffers_by_island, weights, meta
 
     def load_checkpoint(self, device: torch.device):
+        self.loaded_cache = True
+        return self._load_merged(device=device)
         try:
             self.loaded_cache = True
             return data_loader._load_merged_mopderl(root_dir=self.path, merged_stem=self._merged_stem, merged_suffix=self._merged_suffix, device=device)

@@ -402,8 +402,10 @@ class Checkpoint:
         return population, critics, buffers_by_island, weights, meta
 
     def load_checkpoint(self, device: torch.device):
-        self.loaded_cache = True
-        return self._load_merged(device=device)
+        # try:
+        #     self.loaded_cache = True
+        #     return self._load_merged(device=device)
+        # except:
         try:
             self.loaded_cache = True
             return data_loader._load_merged_mopderl(root_dir=self.path, merged_stem=self._merged_stem, merged_suffix=self._merged_suffix, device=device)

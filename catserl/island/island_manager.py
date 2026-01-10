@@ -342,4 +342,4 @@ class IslandManager:
         if self.alg_name == 'td3':
             self.pop = [self._make_rl_actor()]
 
-        return self.pop, self.island_id, self.worker.critic(), self.worker.buffer(), self.w
+        return self.pop, self.island_id, self.worker.critics(), self.worker.buffer(), self.w
